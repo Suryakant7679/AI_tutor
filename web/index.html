@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AIOS Starter</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div>
+        <h1>AIOS</h1>
+        <p>Local starter workspace</p>
+      </div>
+      <label class="theme-picker" for="theme-select">
+        <span>Mode</span>
+        <select id="theme-select">
+          <option value="light">Bright</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <button id="new-chat">New chat</button>
+      <nav id="conversation-list" aria-label="Conversations"></nav>
+    </aside>
+
+    <main class="chat">
+      <section id="messages" class="messages" aria-live="polite"></section>
+      <form id="chat-form" class="composer">
+        <textarea id="message-input" rows="2" placeholder="Ask AIOS something..."></textarea>
+        <div class="composer-actions">
+          <button id="voice-input" class="secondary-action" type="button" aria-label="Start voice input">Mic</button>
+          <button id="voice-output" class="secondary-action" type="button" aria-label="Speak last reply">Speak</button>
+          <button id="cancel-stream" class="secondary-action" type="button" aria-label="Stop response" hidden>Stop</button>
+          <button type="submit">Send</button>
+        </div>
+      </form>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

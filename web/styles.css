@@ -1,0 +1,259 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #111827;
+  --muted: #667085;
+  --line: #d9dee7;
+  --accent: #2563eb;
+  --input-bg: #ffffff;
+  --user-bg: #eef4ff;
+  --user-border: #bfd0ff;
+}
+
+body[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #07111f;
+  --panel: #111c2f;
+  --text: #f3f6fb;
+  --muted: #9fb0c6;
+  --line: #24344e;
+  --accent: #60a5fa;
+  --input-bg: #16253d;
+  --user-bg: #1d3154;
+  --user-border: #3b5a8b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+}
+
+.sidebar h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.sidebar p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  border: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+
+.theme-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.theme-picker select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+#conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  min-height: 0;
+}
+
+.chat {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.messages {
+  padding: 28px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.message {
+  max-width: 850px;
+  width: 100%;
+  margin: 0 auto 16px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message.user {
+  border-color: var(--user-border);
+  background: var(--user-bg);
+}
+
+.message-content h1,
+.message-content h2,
+.message-content h3 {
+  margin: 10px 0 8px;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.message-content p,
+.message-content ul {
+  margin: 8px 0;
+}
+
+.message-content ul {
+  padding-left: 22px;
+}
+
+.message-content pre {
+  overflow-x: auto;
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  white-space: pre;
+}
+
+.message-content code {
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 2px 5px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.94em;
+}
+
+.message-content pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+
+.message-content a {
+  color: var(--accent);
+}
+
+.stream-progress {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.role {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 18px 28px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  align-items: end;
+}
+
+.composer-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.secondary-action {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.secondary-action.active {
+  background: var(--accent);
+  color: white;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  font: inherit;
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+textarea:disabled {
+  background: var(--panel);
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  body {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+}
