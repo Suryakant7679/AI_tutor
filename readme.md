@@ -1,716 +1,171 @@
-================================================================================
-                    AIOS (Artificial Intelligence Operating System)
-           Complete End-to-End Pipeline (Claude Code Inspired Architecture)
-================================================================================
-
-USER
-│
-├── Web Application
-├── Desktop Application
-├── Mobile Application
-└── API Clients
-│
-▼
-================================================================================
-1. FRONTEND LAYER
-================================================================================
-
-User Interface
-│
-├── Chat UI
-├── Sidebar
-├── Conversation History
-├── Multi-Chat Support
-├── Markdown Renderer
-├── Code Syntax Highlighting
-├── File Upload
-├── Image Upload
-├── Audio Upload
-├── PDF Upload
-├── Drag & Drop
-├── Artifacts Panel
-├── Settings
-├── User Profile
-├── Project Workspace
-├── Notification Center
-└── Streaming Response UI
-
-│
-▼
-
-================================================================================
-2. API GATEWAY
-================================================================================
-
-Receive Request
-│
-├── Authentication
-├── Authorization
-├── JWT Verification
-├── Rate Limiting
-├── Request Validation
-├── Logging
-├── Analytics
-├── API Versioning
-├── Streaming Connection
-├── Error Handling
-└── Session Creation
-
-│
-▼
-
-================================================================================
-3. SESSION MANAGER
-================================================================================
-
-Create Session
-│
-├── Session ID
-├── Conversation ID
-├── Active Project
-├── Current Workspace
-├── Running Tasks
-├── Active Files
-├── Active Tools
-├── Token Counter
-├── Context Window Size
-└── User Preferences
-
-│
-▼
-
-================================================================================
-4. CONVERSATION MANAGER
-================================================================================
-
-Conversation Handling
-│
-├── Save Messages
-├── Load Previous Messages
-├── Multi-thread Chats
-├── Conversation Summarization
-├── Conversation Compression
-├── Token Management
-├── Context Pruning
-└── Chat Recovery
-
-│
-▼
-
-================================================================================
-5. MEMORY SYSTEM
-================================================================================
-
-Short Term Memory
-│
-├── Current Conversation
-├── Current Files
-├── Temporary Variables
-├── Active Task
-└── Recent Tool Outputs
-
-Long Term Memory
-│
-├── User Preferences
-├── Coding Style
-├── Previous Projects
-├── Frequently Used Commands
-├── Knowledge Memory
-├── Learned Behaviors
-├── Personal Settings
-└── Historical Context
+# AIOS Tutor
 
-Semantic Memory
-│
-├── Vector Embeddings
-├── Semantic Search
-├── Related Conversations
-└── Similar Documents
+AIOS Tutor is a local AI chat workspace with a browser UI, persistent conversations, streaming model responses, speech controls, and multi-provider LLM support.
 
-│
-▼
+The project is currently a clean starter version of a larger AIOS architecture. It is intentionally small, dependency-light, and easy to run locally while future checkpoints add memory, RAG, tools, agents, and deployment infrastructure.
+
+## Highlights
+
+- Local browser chat UI with sidebar conversation history
+- Multi-chat support with local JSON persistence
+- Streaming assistant responses over NDJSON
+- Live Markdown rendering while responses stream
+- Stream cancellation and interrupted-stream recovery
+- Browser speech-to-text input and text-to-speech output
+- Provider fallback across Groq, Gemini, OpenAI, and DeepSeek
+- Dependency-free Python backend using the standard library
+- Regression tests for parsing, streaming, and provider behavior
+
+## Quick Start
+
+Clone the repo and enter the project:
+
+```powershell
+git clone https://github.com/Suryakant7679/AI_tutor.git
+cd AI_tutor
+```
+
+Create your local environment file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Add at least one API key to `.env`:
+
+```text
+AIOS_PROVIDER=auto
+GROQ_API_KEY=your_key_here
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+DEEPSEEK_API_KEY=
+```
+
+Run the app:
+
+```powershell
+python app/main.py
+```
+
+Open the chat UI:
+
+```text
+http://127.0.0.1:8000
+```
 
-================================================================================
-6. CONTEXT BUILDER
-================================================================================
+Health check:
 
-Collect Everything
+```text
+http://127.0.0.1:8000/api/health
+```
 
-Current Prompt
-        +
-Conversation History
-        +
-Relevant Memory
-        +
-RAG Documents
-        +
-Uploaded Files
-        +
-Current Project
-        +
-Open Files
-        +
-Terminal Output
-        +
-Git Status
-        +
-Browser Results
-        +
-MCP Outputs
-        +
-Running Tasks
-        +
-System Prompt
-        +
-Developer Instructions
-        +
-User Preferences
+## Configuration
 
-↓
-
-Rank Context
-
-↓
-
-Compress Context
-
-↓
-
-Remove Duplicates
-
-↓
-
-Fit Into Context Window
-
-↓
-
-Final Prompt Package
+The app loads `.env` on startup. Restart the server after changing provider keys or model names.
 
-│
-▼
+| Variable | Purpose |
+| --- | --- |
+| `AIOS_HOST` | Local host for the server. Defaults to `127.0.0.1`. |
+| `AIOS_PORT` | Local port for the server. Defaults to `8000`. |
+| `AIOS_DATA_FILE` | Conversation storage path. Defaults to `data/conversations.json`. |
+| `AIOS_PROVIDER` | Provider mode: `auto`, `groq`, `gemini`, `openai`, or `deepseek`. |
+| `AIOS_DEFAULT_MODEL` | Optional model override used when provider-specific values are blank. |
+| `AIOS_TEMPERATURE` | Model temperature. |
+| `AIOS_LLM_TIMEOUT` | Provider request timeout in seconds. |
+| `AIOS_LLM_RETRIES` | Retry count for non-streaming calls. |
 
-================================================================================
-7. PLANNER AGENT
-================================================================================
+Provider-specific model variables:
 
-Understand User Goal
+```text
+AIOS_GROQ_MODEL=llama-3.1-8b-instant
+AIOS_GEMINI_MODEL=gemini-2.0-flash
+AIOS_OPENAI_MODEL=gpt-4o-mini
+AIOS_DEEPSEEK_MODEL=deepseek-chat
+```
 
-↓
+When `AIOS_PROVIDER=auto`, AIOS tries configured providers in this order:
 
-Task Classification
+```text
+Groq -> Gemini -> OpenAI -> DeepSeek
+```
 
-↓
+## Project Structure
 
-Complexity Analysis
-
-↓
-
-Break Into Subtasks
-
-↓
-
-Determine Required Tools
-
-↓
-
-Estimate Dependencies
-
-↓
-
-Generate Execution Plan
-
-↓
-
-Pass Plan To LangGraph
-
-│
-▼
-
-================================================================================
-8. LANGGRAPH ORCHESTRATOR
-================================================================================
-
-START
-
-↓
-
-Planner Node
-
-↓
-
-Decision Node
-
-├── Need Memory?
-│      │
-│      └── Memory Agent
-│
-├── Need Documents?
-│      │
-│      └── RAG Agent
-│
-├── Need Internet?
-│      │
-│      └── Browser Agent
-│
-├── Need Code?
-│      │
-│      └── Coding Agent
-│
-├── Need Terminal?
-│      │
-│      └── Terminal Agent
-│
-├── Need Files?
-│      │
-│      └── Filesystem Agent
-│
-├── Need Vision?
-│      │
-│      └── Vision Agent
-│
-├── Need Database?
-│      │
-│      └── Database Agent
-│
-└── Need API?
-       │
-       └── Tool Agent
-
-↓
-
-Merge Results
-
-↓
-
-Reflection Agent
-
-↓
-
-Retry Failed Tasks?
-
-↓
-
-Reviewer Agent
-
-↓
-
-Generate Final Output
-
-↓
-
-END
-
-│
-▼
-
-================================================================================
-9. MCP ROUTER
-================================================================================
-
-Receive Tool Request
-
-↓
-
-Identify Tool
-
-↓
-
-Available MCP Servers
-
-├── Filesystem MCP
-├── Python MCP
-├── Terminal MCP
-├── Browser MCP
-├── Git MCP
-├── GitHub MCP
-├── Docker MCP
-├── Kubernetes MCP
-├── PostgreSQL MCP
-├── SQLite MCP
-├── Redis MCP
-├── AWS MCP
-├── GCP MCP
-├── Azure MCP
-├── Slack MCP
-├── Discord MCP
-├── Notion MCP
-├── Google Drive MCP
-├── Gmail MCP
-├── Calendar MCP
-├── Jira MCP
-├── Linear MCP
-├── Supabase MCP
-├── REST API MCP
-├── Local Shell MCP
-├── OCR MCP
-├── Image Processing MCP
-└── Custom MCP Servers
-
-↓
-
-Execute Tool
-
-↓
-
-Collect Output
-
-↓
-
-Return Result
-
-│
-▼
-
-================================================================================
-10. RAG PIPELINE
-================================================================================
-
-Document Upload
-
-↓
-
-OCR (if required)
-
-↓
-
-Text Cleaning
-
-↓
-
-Chunking
-
-↓
-
-Metadata Extraction
-
-↓
-
-Embedding Generation
-
-↓
-
-Vector Database Storage
-
-↓
-
-Hybrid Retrieval
-
-↓
-
-Re-ranking
-
-↓
-
-Top K Selection
-
-↓
-
-Citation Generation
-
-↓
-
-Return Context
-
-│
-▼
-
-================================================================================
-11. MODEL ROUTER
-================================================================================
-
-Task Classification
-
-↓
-
-Coding?
-
-↓
-
-Reasoning?
-
-↓
-
-Vision?
-
-↓
-
-Math?
-
-↓
-
-General Chat?
-
-↓
-
-Research?
-
-↓
-
-Choose Best Model
-
-↓
-
-Supported Models
-
-├── Grok
-├── DeepSeek
-├── Llama
-├── Gemma
-├── Qwen
-├── Phi
-├── Mistral
-├── Local Ollama Models
-└── Future Models
-
-↓
-
-Generate Response
-
-│
-▼
-
-================================================================================
-12. RESPONSE VALIDATOR
-================================================================================
-
-Validate Output
-
-├── Markdown Check
-├── JSON Validation
-├── Code Validation
-├── Hallucination Detection
-├── Tool Output Verification
-├── Missing Information Check
-├── Citation Check
-├── Safety Check
-├── Grammar Check
-└── Formatting
-
-↓
-
-Approve Response
-
-│
-▼
-
-================================================================================
-13. STREAMING ENGINE
-================================================================================
-
-Generate Tokens
-
-↓
-
-Stream Tokens
-
-↓
-
-Update Frontend
-
-↓
-
-Show Tool Execution
-
-↓
-
-Display Progress
-
-↓
-
-Live Markdown Rendering
-
-↓
-
-Final Response
-
-│
-▼
-
-================================================================================
-14. DATABASE LAYER
-================================================================================
-
-PostgreSQL
-
-├── Users
-├── Chats
-├── Sessions
-├── Projects
-├── Files
-├── Settings
-├── API Keys
-├── Logs
-└── Analytics
-
-Redis
-
-├── Active Sessions
-├── Cache
-├── Streaming
-├── Queue
-├── Temporary Memory
-└── Rate Limits
-
-Qdrant
-
-├── Document Embeddings
-├── Memory Embeddings
-├── Code Embeddings
-├── Conversation Embeddings
-└── Knowledge Base
-
-Local Storage
-
-├── Uploaded Files
-├── Images
-├── Generated Files
-├── Artifacts
-└── Logs
-
-│
-▼
-
-================================================================================
-15. BACKGROUND WORKERS
-================================================================================
-
-Asynchronous Tasks
-
-├── PDF Processing
-├── OCR
-├── Embedding Generation
-├── Memory Compression
-├── Conversation Summaries
-├── Git Monitoring
-├── File Monitoring
-├── Cache Cleanup
-├── Analytics
-├── Health Checks
-├── Scheduled Jobs
-├── Email Notifications
-├── Backup
-└── Vector Index Updates
-
-│
-▼
-
-================================================================================
-16. OBSERVABILITY
-================================================================================
-
-Monitoring
-
-├── Token Usage
-├── API Latency
-├── Model Performance
-├── Tool Success Rate
-├── Error Tracking
-├── User Analytics
-├── Memory Usage
-├── GPU Usage
-├── CPU Usage
-├── Queue Status
-├── Cost Tracking
-└── System Health
-
-│
-▼
-
-================================================================================
-17. DEPLOYMENT
-================================================================================
-
-Docker Containers
-
-├── Frontend
-├── Backend
-├── PostgreSQL
-├── Redis
-├── Qdrant
-├── Nginx
-├── Worker
-├── Scheduler
-├── Monitoring
-└── MCP Servers
-
-↓
-
-Reverse Proxy
-
-↓
-
-HTTPS
-
-↓
-
-Cloudflare Tunnel / Domain
-
-↓
-
-Production
-
-================================================================================
-
-FINAL EXECUTION FLOW
-
-User
-    │
-    ▼
-Frontend
-    │
-    ▼
-API Gateway
-    │
-    ▼
-Authentication
-    │
-    ▼
-Session Manager
-    │
-    ▼
-Conversation Manager
-    │
-    ▼
-Memory Retrieval
-    │
-    ▼
-Context Builder
-    │
-    ▼
-Planner Agent
-    │
-    ▼
-LangGraph
-    │
-    ├── Memory Agent
-    ├── RAG Agent
-    ├── Coding Agent
-    ├── Browser Agent
-    ├── Vision Agent
-    ├── Tool Agent
-    ├── Filesystem Agent
-    ├── Terminal Agent
-    └── Reflection Agent
-    │
-    ▼
-MCP Router
-    │
-    ▼
-Model Router
-    │
-    ▼
-LLM
-    │
-    ▼
-Validator
-    │
-    ▼
-Streaming Engine
-    │
-    ▼
-Frontend
-    │
-    ▼
-User
-
-================================================================================
+```text
+AI_tutor/
+  app/
+    config.py        .env loading and configured key detection
+    llm.py           provider calls, fallback, streaming parsers
+    main.py          HTTP server, API routes, static file serving
+    store.py         local JSON conversation storage
+  data/
+    .gitkeep         keeps the data folder in Git
+  docs/
+    plan.md          checkpoint roadmap
+  tests/
+    test_main.py     regression tests
+  web/
+    index.html       chat layout
+    app.js           frontend chat, streaming, voice, Markdown
+    styles.css       responsive UI styles
+  .env.example       safe environment template
+  SETUP.md           extra local setup notes
+```
+
+## API Overview
+
+| Method | Route | Description |
+| --- | --- | --- |
+| `GET` | `/api/health` | Returns server status and configured API key names. |
+| `GET` | `/api/conversations` | Lists saved conversations. |
+| `POST` | `/api/conversations` | Creates a new conversation. |
+| `GET` | `/api/conversations/{id}` | Loads one conversation and its messages. |
+| `POST` | `/api/chat` | Sends a user message and returns a normal or streaming assistant reply. |
+
+Streaming chat responses use newline-delimited JSON events:
+
+```json
+{"type":"meta","conversation_id":"...","provider":"gemini"}
+{"type":"progress","stage":"model","message":"Model stream connected"}
+{"type":"delta","content":"Hello"}
+{"type":"done","message":{"role":"assistant","content":"Hello"}}
+```
+
+## Testing
+
+Run the Python test suite:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+Optional frontend syntax check:
+
+```powershell
+node --check web/app.js
+```
+
+## Roadmap
+
+The active roadmap lives in [docs/plan.md](docs/plan.md).
+
+Current completed checkpoints:
+
+- Checkpoint 1: Local Chat Starter
+- Checkpoint 2: LLM Provider Layer
+- Checkpoint 3: Streaming Engine
+
+Next major areas:
+
+- Frontend uploads and syntax highlighting
+- Session and workspace tracking
+- Memory and semantic search
+- RAG pipeline
+- Tool routing and agent orchestration
+- Deployment with Docker, databases, and monitoring
+
+## Notes
+
+- `.env` is ignored by Git so API keys stay local.
+- `data/*.json` is ignored by Git so private chat history stays local.
+- This is a local development app, not a production-secured service yet.
