@@ -66,19 +66,19 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 - [x] Conversation history
 - [x] Multi-chat support
 - [x] Streaming response UI
-- [ ] Markdown renderer
-- [ ] Code syntax highlighting
-- [ ] File upload
-- [ ] Image upload
-- [ ] Audio upload
-- [ ] PDF upload
-- [ ] Drag and drop uploads
-- [ ] Artifacts panel
-- [ ] Settings screen
-- [ ] User profile
-- [ ] Project workspace view
-- [ ] Notification center
-- [ ] Mobile-first UI polish
+- [x] Markdown renderer
+- [x] Code syntax highlighting
+- [x] File upload
+- [x] Image upload
+- [x] Audio upload
+- [x] PDF upload
+- [x] Drag and drop uploads
+- [x] Artifacts panel
+- [x] Settings screen
+- [x] User profile
+- [x] Project workspace view
+- [x] Notification center
+- [x] Mobile-first UI polish
 
 ## Checkpoint 5: API Gateway
 

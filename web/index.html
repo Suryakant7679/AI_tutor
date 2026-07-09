@@ -3,38 +3,131 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AIOS Starter</title>
+    <title>AI Tutor</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <aside class="sidebar">
-      <div>
-        <h1>AIOS</h1>
-        <p>Local starter workspace</p>
+      <div class="sidebar-top">
+        <div class="brand-mark">A</div>
+        <button id="mobile-tools" class="icon-button" type="button" aria-label="Open tools">⚙</button>
       </div>
-      <label class="theme-picker" for="theme-select">
-        <span>Mode</span>
-        <select id="theme-select">
-          <option value="light">Bright</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-      <button id="new-chat">New chat</button>
+      <button id="new-chat" class="nav-action" type="button"><span>+</span> New chat</button>
+      <button class="nav-action muted-action" type="button">Search chats</button>
+      <button class="nav-action muted-action" type="button">Library</button>
+      <button class="nav-action muted-action" type="button">Projects</button>
+      <h2>Recent</h2>
       <nav id="conversation-list" aria-label="Conversations"></nav>
+      <div class="sidebar-footer">
+        <div class="avatar">S</div>
+        <div>
+          <strong>Surya</strong>
+        </div>
+      </div>
     </aside>
 
     <main class="chat">
-      <section id="messages" class="messages" aria-live="polite"></section>
-      <form id="chat-form" class="composer">
-        <textarea id="message-input" rows="2" placeholder="Ask AIOS something..."></textarea>
-        <div class="composer-actions">
-          <button id="voice-input" class="secondary-action" type="button" aria-label="Start voice input">Mic</button>
-          <button id="voice-output" class="secondary-action" type="button" aria-label="Speak last reply">Speak</button>
-          <button id="cancel-stream" class="secondary-action" type="button" aria-label="Stop response" hidden>Stop</button>
-          <button type="submit">Send</button>
+      <header class="topbar">
+        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="Toggle sidebar">☰</button>
+        <div class="model-title">AI Tutor</div>
+        <button id="tools-toggle" class="icon-button" type="button" aria-label="Open workspace tools">⚙</button>
+      </header>
+
+      <section class="chat-stage">
+        <div id="empty-state" class="empty-state"></div>
+        <section id="messages" class="messages" aria-live="polite"></section>
+      </section>
+
+      <section class="composer-shell">
+        <form id="chat-form" class="composer">
+          <div id="drop-zone" class="drop-zone">
+            <input id="file-input" type="file" multiple accept=".txt,.md,.json,.csv,.py,.js,.html,.css,.pdf,image/*,audio/*" />
+            <label class="plus-upload" for="file-input" aria-label="Upload files">+</label>
+            <span id="attachment-count"></span>
+          </div>
+          <textarea id="message-input" rows="1" placeholder="Ask anything"></textarea>
+          <div class="composer-actions">
+            <button id="voice-input" class="round-action" type="button" aria-label="Start voice input">♪</button>
+            <button id="voice-output" class="round-action" type="button" aria-label="Speak last reply">◌</button>
+            <button id="cancel-stream" class="round-action danger-action" type="button" aria-label="Stop response" hidden>■</button>
+            <button id="send-message" class="round-action send-action" type="submit" aria-label="Send message">↑</button>
+          </div>
+        </form>
+        <div class="quick-actions">
+          <button type="button">Create an image</button>
+          <button type="button">Write or edit</button>
+          <button type="button">Look something up</button>
         </div>
-      </form>
+      </section>
     </main>
+
+    <aside id="tool-panel" class="tool-panel">
+      <div class="panel-heading">
+        <h2>Workspace</h2>
+        <button id="close-tools" class="icon-button" type="button" aria-label="Close tools">×</button>
+      </div>
+      <section>
+        <div class="panel-heading">
+          <h3>Artifacts</h3>
+          <button id="refresh-artifacts" class="ghost" type="button">Refresh</button>
+        </div>
+        <div id="artifact-list" class="artifact-list"></div>
+      </section>
+
+      <section>
+        <h3>Settings</h3>
+        <label class="field">
+          <span>Mode</span>
+          <select id="theme-select">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Model mode</span>
+          <select id="provider-mode">
+            <option value="auto">Auto fallback</option>
+            <option value="groq">Groq</option>
+            <option value="gemini">Gemini</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </label>
+        <label class="field inline">
+          <input id="compact-mode" type="checkbox" />
+          <span>Compact messages</span>
+        </label>
+      </section>
+
+      <section>
+        <h3>Profile</h3>
+        <label class="field">
+          <span>Name</span>
+          <input id="profile-name" type="text" placeholder="Your name" />
+        </label>
+        <label class="field">
+          <span>Role</span>
+          <input id="profile-role" type="text" placeholder="Student, developer..." />
+        </label>
+      </section>
+
+      <section>
+        <h3>Project</h3>
+        <label class="field">
+          <span>Project</span>
+          <input id="workspace-name" type="text" placeholder="AI Tutor" />
+        </label>
+        <label class="field">
+          <span>Current focus</span>
+          <input id="workspace-focus" type="text" placeholder="Checkpoint 4" />
+        </label>
+      </section>
+
+      <section>
+        <h3>Notifications</h3>
+        <div id="notification-list" class="notification-list"></div>
+      </section>
+    </aside>
 
     <script src="/app.js"></script>
   </body>

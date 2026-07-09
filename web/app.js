@@ -3,6 +3,7 @@ let lastAssistantText = "";
 let recognition = null;
 let speechSynthesisSupported = "speechSynthesis" in window;
 let streamController = null;
+let selectedFiles = [];
 
 const messages = document.querySelector("#messages");
 const form = document.querySelector("#chat-form");
@@ -13,6 +14,23 @@ const voiceInputButton = document.querySelector("#voice-input");
 const voiceOutputButton = document.querySelector("#voice-output");
 const cancelStreamButton = document.querySelector("#cancel-stream");
 const themeSelect = document.querySelector("#theme-select");
+const fileInput = document.querySelector("#file-input");
+const dropZone = document.querySelector("#drop-zone");
+const attachmentCount = document.querySelector("#attachment-count");
+const artifactList = document.querySelector("#artifact-list");
+const refreshArtifacts = document.querySelector("#refresh-artifacts");
+const providerMode = document.querySelector("#provider-mode");
+const compactMode = document.querySelector("#compact-mode");
+const profileName = document.querySelector("#profile-name");
+const profileRole = document.querySelector("#profile-role");
+const workspaceName = document.querySelector("#workspace-name");
+const workspaceFocus = document.querySelector("#workspace-focus");
+const notificationList = document.querySelector("#notification-list");
+const mobileTools = document.querySelector("#mobile-tools");
+const toolsToggle = document.querySelector("#tools-toggle");
+const closeTools = document.querySelector("#close-tools");
+const sidebarToggle = document.querySelector("#sidebar-toggle");
+const emptyState = document.querySelector("#empty-state");
 
 function applyTheme(theme) {
   const resolvedTheme = theme === "dark" ? "dark" : "light";
@@ -24,13 +42,56 @@ function applyTheme(theme) {
 }
 
 const savedTheme = localStorage.getItem("aios-theme");
-applyTheme(savedTheme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+applyTheme(savedTheme || "dark");
 
 if (themeSelect) {
   themeSelect.addEventListener("change", (event) => {
     applyTheme(event.target.value);
   });
 }
+
+loadPreferences();
+
+if (fileInput) {
+  fileInput.addEventListener("change", () => {
+    addSelectedFiles(Array.from(fileInput.files || []));
+    fileInput.value = "";
+  });
+}
+
+if (dropZone) {
+  ["dragenter", "dragover"].forEach((name) => {
+    dropZone.addEventListener(name, (event) => {
+      event.preventDefault();
+      dropZone.classList.add("dragging");
+    });
+  });
+
+  ["dragleave", "drop"].forEach((name) => {
+    dropZone.addEventListener(name, () => dropZone.classList.remove("dragging"));
+  });
+
+  dropZone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    addSelectedFiles(Array.from(event.dataTransfer.files || []));
+  });
+}
+
+refreshArtifacts.addEventListener("click", loadArtifacts);
+mobileTools.addEventListener("click", () => document.body.classList.toggle("tools-open"));
+toolsToggle.addEventListener("click", () => document.body.classList.toggle("tools-open"));
+closeTools.addEventListener("click", () => document.body.classList.remove("tools-open"));
+sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+});
+
+[providerMode, compactMode, profileName, profileRole, workspaceName, workspaceFocus].forEach((control) => {
+  control.addEventListener("change", savePreferences);
+  control.addEventListener("input", savePreferences);
+});
 
 if (window.SpeechRecognition || window.webkitSpeechRecognition) {
   const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -87,21 +148,36 @@ voiceOutputButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const content = input.value.trim();
+  let content = input.value.trim();
+  if (!content && selectedFiles.length) {
+    content = "Please review the attached files.";
+  }
   if (!content) return;
 
   input.value = "";
+  input.style.height = "auto";
   input.disabled = true;
-  appendMessage("user", content);
-  const pending = appendMessage("assistant", "Thinking...");
+  setComposerBusy(true);
+  const attachments = selectedFiles.slice();
+  selectedFiles = [];
+  updateAttachmentCount();
+  appendMessage("user", attachments.length ? `${content}\n\n${fileSummary(attachments)}` : content);
+  const pending = appendMessage("assistant", "");
+  setMessageProcessing(pending, "Preparing request");
   streamController = new AbortController();
   cancelStreamButton.hidden = false;
 
   try {
+    const uploadedArtifacts = attachments.length ? await uploadFiles(attachments) : [];
+    if (uploadedArtifacts.length) {
+      notify("Uploads ready", `${uploadedArtifacts.length} artifact(s) attached to this message.`);
+      await loadArtifacts();
+    }
+    const enrichedContent = buildChatContent(content, uploadedArtifacts);
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: activeConversationId, message: content, stream: true }),
+      body: JSON.stringify({ conversation_id: activeConversationId, message: enrichedContent, stream: true }),
       signal: streamController.signal,
     });
 
@@ -115,16 +191,20 @@ form.addEventListener("submit", async (event) => {
     lastAssistantText = pending.textContent || "";
     localStorage.removeItem("aios-active-stream");
     await loadConversations();
+    notify("Reply complete", "The assistant response finished streaming.");
   } catch (error) {
     if (error.name === "AbortError") {
       updateMessage(pending, `${lastAssistantText || "Response"}\n\n[Response stopped.]`);
       await recoverInterruptedStream();
+      notify("Stream stopped", "The current response was cancelled.");
     } else {
       updateMessage(pending, `Error: ${shortError(error.message || "Could not reach the local AIOS server.")}`);
       await recoverInterruptedStream();
+      notify("Chat error", shortError(error.message || "Could not reach the local AIOS server."));
     }
   } finally {
     input.disabled = false;
+    setComposerBusy(false);
     input.focus();
     cancelStreamButton.hidden = true;
     streamController = null;
@@ -138,12 +218,15 @@ cancelStreamButton.addEventListener("click", () => {
 });
 
 newChat.addEventListener("click", async () => {
-  const response = await fetch("/api/conversations", { method: "POST" });
-  const conversation = await response.json();
-  activeConversationId = conversation.id;
+  activeConversationId = null;
   messages.innerHTML = "";
+  selectedFiles = [];
+  updateAttachmentCount();
+  updateEmptyState();
   localStorage.removeItem("aios-active-stream");
-  await loadConversations();
+  input.value = "";
+  input.style.height = "auto";
+  input.focus();
 });
 
 async function loadConversations() {
@@ -167,6 +250,7 @@ async function openConversation(id) {
   localStorage.removeItem("aios-active-stream");
   messages.innerHTML = "";
   conversation.messages.forEach((message) => appendMessage(message.role, message.content));
+  updateEmptyState();
 }
 
 async function readChatStream(response, pending) {
@@ -188,13 +272,17 @@ async function readChatStream(response, pending) {
           activeConversationId = event.conversation_id;
           provider = event.provider || "";
           localStorage.setItem("aios-active-stream", activeConversationId);
-          updateMessage(pending, assistantText || "Thinking...", provider, progressText);
+          setMessageProcessing(pending, progressText || "Preparing stream", provider);
         } else if (event.type === "progress") {
           progressText = event.message || event.stage || "";
-          updateMessage(pending, assistantText || "Thinking...", provider, progressText);
+          if (assistantText) {
+            updateMessage(pending, assistantText, provider, progressText, true);
+          } else {
+            setMessageProcessing(pending, progressText, provider);
+          }
         } else if (event.type === "delta") {
           assistantText += event.content || "";
-          updateMessage(pending, assistantText, provider, progressText);
+          updateMessage(pending, assistantText, provider, progressText, true);
         } else if (event.type === "done") {
           progressText = "";
           localStorage.removeItem("aios-active-stream");
@@ -238,28 +326,51 @@ function appendMessage(role, content) {
   article.innerHTML = messageHtml(role, content);
   messages.appendChild(article);
   messages.scrollTop = messages.scrollHeight;
+  updateEmptyState();
   return article;
 }
 
-function updateMessage(article, content, provider = "", progress = "") {
+function updateMessage(article, content, provider = "", progress = "", isStreaming = false) {
   const role = provider ? `assistant via ${provider}` : "assistant";
-  article.innerHTML = messageHtml(role, content, progress);
+  article.classList.toggle("streaming", isStreaming);
+  article.classList.remove("processing");
+  article.innerHTML = messageHtml(role, content, progress, isStreaming);
   messages.scrollTop = messages.scrollHeight;
   if (role.startsWith("assistant")) {
     lastAssistantText = content;
   }
+  updateEmptyState();
 }
 
-function messageHtml(role, content, progress = "") {
+function setMessageProcessing(article, status, provider = "") {
+  const role = provider ? `assistant via ${provider}` : "assistant";
+  article.classList.add("processing");
+  article.classList.remove("streaming");
+  article.innerHTML = processingHtml(role, status);
+  messages.scrollTop = messages.scrollHeight;
+  updateEmptyState();
+}
+
+function updateEmptyState() {
+  emptyState.hidden = Boolean(messages.children.length);
+}
+
+function messageHtml(role, content, progress = "", isStreaming = false) {
+  const cursor = isStreaming ? '<span class="stream-cursor"></span>' : "";
   const progressHtml = progress ? `<div class="stream-progress">${escapeHtml(progress)}</div>` : "";
-  return `<strong class="role">${escapeHtml(role)}</strong><div class="message-content">${renderMarkdown(content)}</div>${progressHtml}`;
+  return `<strong class="role">${escapeHtml(role)}</strong><div class="message-content">${renderMarkdown(content)}${cursor}</div>${progressHtml}`;
+}
+
+function processingHtml(role, status) {
+  const progressHtml = `<div class="stream-progress">${escapeHtml(status || "Processing")}</div>`;
+  return `<strong class="role">${escapeHtml(role)}</strong><div class="message-content"><span class="typing-dots"><span></span><span></span><span></span></span></div>${progressHtml}`;
 }
 
 function renderMarkdown(value) {
   const blocks = [];
-  let escaped = escapeHtml(value || "").replace(/```([\s\S]*?)```/g, (_, code) => {
+  let escaped = escapeHtml(value || "").replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, language, code) => {
     const token = `@@CODE${blocks.length}@@`;
-    blocks.push(`<pre><code>${code.trim()}</code></pre>`);
+    blocks.push(`<pre><code data-language="${escapeHtml(language || "text")}">${highlightCode(code.trim(), language || "")}</code></pre>`);
     return token;
   });
 
@@ -284,6 +395,23 @@ function renderMarkdown(value) {
   return escaped;
 }
 
+function highlightCode(code, language) {
+  let highlighted = escapeHtml(code);
+  highlighted = highlighted.replace(/(&quot;.*?&quot;|&#039;.*?&#039;)/g, '<span class="syntax-string">$1</span>');
+  const keywordSets = {
+    py: "def|class|return|import|from|if|elif|else|for|while|try|except|with|as|True|False|None",
+    python: "def|class|return|import|from|if|elif|else|for|while|try|except|with|as|True|False|None",
+    js: "function|const|let|var|return|import|export|if|else|for|while|try|catch|await|async|new",
+    javascript: "function|const|let|var|return|import|export|if|else|for|while|try|catch|await|async|new",
+    json: "true|false|null",
+  };
+  const pattern = keywordSets[String(language).toLowerCase()];
+  if (pattern) {
+    highlighted = highlighted.replace(new RegExp(`\\b(${pattern})\\b`, "g"), '<span class="syntax-keyword">$1</span>');
+  }
+  return highlighted;
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => {
     const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
@@ -293,6 +421,142 @@ function escapeHtml(value) {
 
 function shortError(value) {
   return value.length > 700 ? `${value.slice(0, 700)}...` : value;
+}
+
+function addSelectedFiles(files) {
+  selectedFiles = [...selectedFiles, ...files].slice(0, 8);
+  updateAttachmentCount();
+  if (files.length) {
+    notify("Files selected", `${files.length} file(s) ready to attach.`);
+  }
+}
+
+function updateAttachmentCount() {
+  attachmentCount.textContent = selectedFiles.length ? `${selectedFiles.length} file${selectedFiles.length === 1 ? "" : "s"}` : "";
+}
+
+function fileSummary(files) {
+  return files.map((file) => `- ${file.name} (${formatBytes(file.size)})`).join("\n");
+}
+
+async function uploadFiles(files) {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  const response = await fetch("/api/uploads", { method: "POST", body: formData });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || "Upload failed.");
+  }
+  return payload.artifacts || [];
+}
+
+function buildChatContent(content, artifacts) {
+  const profile = loadJson("aios-profile", {});
+  const workspace = loadJson("aios-workspace", {});
+  const parts = [content];
+  if (profile.name || profile.role) {
+    parts.push(`User profile: ${[profile.name, profile.role].filter(Boolean).join(" - ")}`);
+  }
+  if (workspace.name || workspace.focus) {
+    parts.push(`Workspace: ${[workspace.name, workspace.focus].filter(Boolean).join(" - ")}`);
+  }
+  if (artifacts.length) {
+    parts.push(
+      "Attached artifacts:\n" +
+        artifacts
+          .map((item) => {
+            const preview = item.preview ? `\nPreview:\n${item.preview.slice(0, 1200)}` : "";
+            return `- ${item.filename} (${item.category}, ${formatBytes(item.size)})${preview}`;
+          })
+          .join("\n")
+    );
+  }
+  return parts.join("\n\n");
+}
+
+async function loadArtifacts() {
+  const response = await fetch("/api/uploads");
+  const payload = await response.json();
+  renderArtifacts(payload.artifacts || []);
+}
+
+function renderArtifacts(artifacts) {
+  artifactList.innerHTML = "";
+  if (!artifacts.length) {
+    artifactList.innerHTML = '<div class="artifact"><small>No artifacts yet.</small></div>';
+    return;
+  }
+  artifacts.slice(0, 12).forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "artifact";
+    const url = `/api/uploads/${item.id}/content`;
+    const preview =
+      item.category === "image"
+        ? `<img src="${url}" alt="${escapeHtml(item.filename)}" />`
+        : item.category === "audio"
+          ? `<audio src="${url}" controls></audio>`
+          : item.category === "pdf"
+            ? `<a href="${url}" target="_blank" rel="noreferrer">Open PDF</a>`
+            : item.preview
+              ? `<small>${escapeHtml(item.preview.slice(0, 160))}</small>`
+              : "";
+    card.innerHTML = `<strong>${escapeHtml(item.filename)}</strong><small>${item.category} - ${formatBytes(item.size)}</small>${preview}`;
+    artifactList.appendChild(card);
+  });
+}
+
+function loadPreferences() {
+  const settings = loadJson("aios-settings", {});
+  const profile = loadJson("aios-profile", {});
+  const workspace = loadJson("aios-workspace", {});
+  providerMode.value = settings.providerMode || "auto";
+  compactMode.checked = Boolean(settings.compactMode);
+  profileName.value = profile.name || "";
+  profileRole.value = profile.role || "";
+  workspaceName.value = workspace.name || "";
+  workspaceFocus.value = workspace.focus || "";
+  document.body.classList.toggle("compact", compactMode.checked);
+}
+
+function savePreferences() {
+  localStorage.setItem("aios-settings", JSON.stringify({ providerMode: providerMode.value, compactMode: compactMode.checked }));
+  localStorage.setItem("aios-profile", JSON.stringify({ name: profileName.value.trim(), role: profileRole.value.trim() }));
+  localStorage.setItem("aios-workspace", JSON.stringify({ name: workspaceName.value.trim(), focus: workspaceFocus.value.trim() }));
+  document.body.classList.toggle("compact", compactMode.checked);
+}
+
+function loadJson(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null") || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function notify(title, detail) {
+  const notices = loadJson("aios-notifications", []);
+  notices.unshift({ title, detail, createdAt: new Date().toLocaleTimeString() });
+  localStorage.setItem("aios-notifications", JSON.stringify(notices.slice(0, 8)));
+  renderNotifications();
+}
+
+function renderNotifications() {
+  const notices = loadJson("aios-notifications", []);
+  notificationList.innerHTML = notices.length
+    ? notices.map((item) => `<div class="notice"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.createdAt)} - ${escapeHtml(item.detail)}</small></div>`).join("")
+    : '<div class="notice"><small>No notifications yet.</small></div>';
+}
+
+function setComposerBusy(isBusy) {
+  if (fileInput) {
+    fileInput.disabled = isBusy;
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 async function recoverInterruptedStream() {
@@ -310,6 +574,9 @@ async function recoverInterruptedStream() {
 
 async function boot() {
   await loadConversations();
+  await loadArtifacts();
+  renderNotifications();
+  updateEmptyState();
   const recoveryId = localStorage.getItem("aios-active-stream");
   if (recoveryId) {
     await recoverInterruptedStream();

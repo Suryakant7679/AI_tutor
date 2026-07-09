@@ -1,6 +1,6 @@
-# AIOS Tutor
+# AI Tutor
 
-AIOS Tutor is a local AI chat workspace with a browser UI, persistent conversations, streaming model responses, speech controls, and multi-provider LLM support.
+AI Tutor is a local AI chat workspace with a browser UI, persistent conversations, streaming model responses, speech controls, and multi-provider LLM support.
 
 The project is currently a clean starter version of a larger AIOS architecture. It is intentionally small, dependency-light, and easy to run locally while future checkpoints add memory, RAG, tools, agents, and deployment infrastructure.
 

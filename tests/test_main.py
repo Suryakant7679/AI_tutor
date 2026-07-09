@@ -2,7 +2,7 @@ import os
 import unittest
 
 from app.llm import gemini_models_to_try, parse_chat_completion_stream_event, parse_gemini_stream_event
-from app.main import iter_stream_chunks, parse_json_body
+from app.main import artifact_category, iter_stream_chunks, parse_json_body, parse_multipart_files, safe_filename
 
 
 class ParseJsonBodyTests(unittest.TestCase):
@@ -54,6 +54,29 @@ class GeminiModelFallbackTests(unittest.TestCase):
 class StreamingChunkingTests(unittest.TestCase):
     def test_large_stream_chunks_are_split_for_incremental_updates(self) -> None:
         self.assertEqual(list(iter_stream_chunks(["hello world"], chunk_size=5)), ["hello", " worl", "d"])
+
+
+class UploadParsingTests(unittest.TestCase):
+    def test_multipart_upload_extracts_file(self) -> None:
+        boundary = "----aios-test"
+        body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="files"; filename="notes.txt"\r\n'
+            "Content-Type: text/plain\r\n\r\n"
+            "hello upload\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        files = parse_multipart_files(f"multipart/form-data; boundary={boundary}", body)
+        self.assertEqual(files[0]["filename"], "notes.txt")
+        self.assertEqual(files[0]["content"], b"hello upload")
+
+    def test_safe_filename_removes_unsafe_characters(self) -> None:
+        self.assertEqual(safe_filename("../bad<>name.txt"), "bad-name.txt")
+
+    def test_artifact_category_detects_media(self) -> None:
+        self.assertEqual(artifact_category("photo.png", "image/png"), "image")
+        self.assertEqual(artifact_category("voice.mp3", "audio/mpeg"), "audio")
+        self.assertEqual(artifact_category("paper.pdf", "application/pdf"), "pdf")
 
 
 if __name__ == "__main__":
