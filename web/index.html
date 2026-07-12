@@ -41,7 +41,7 @@
       <section class="composer-shell">
         <form id="chat-form" class="composer">
           <div id="drop-zone" class="drop-zone">
-            <input id="file-input" type="file" multiple accept=".txt,.md,.json,.csv,.py,.js,.html,.css,.pdf,image/*,audio/*" />
+            <input id="file-input" type="file" multiple accept=".txt,.md,.json,.csv,.py,.js,.html,.css,.pdf,.doc,.docx,.rtf,.odt,image/*,audio/*" />
             <label class="plus-upload" for="file-input" aria-label="Upload files">+</label>
             <span id="attachment-count"></span>
           </div>
@@ -49,7 +49,6 @@
           <div class="composer-actions">
             <button id="voice-input" class="round-action" type="button" aria-label="Start voice input">♪</button>
             <button id="voice-output" class="round-action" type="button" aria-label="Speak last reply">◌</button>
-            <button id="cancel-stream" class="round-action danger-action" type="button" aria-label="Stop response" hidden>■</button>
             <button id="send-message" class="round-action send-action" type="submit" aria-label="Send message">↑</button>
           </div>
         </form>
@@ -93,6 +92,10 @@
             <option value="deepseek">DeepSeek</option>
           </select>
         </label>
+        <label class="field">
+          <span>Context window tokens</span>
+          <input id="context-window" type="number" min="500" max="128000" step="500" />
+        </label>
         <label class="field inline">
           <input id="compact-mode" type="checkbox" />
           <span>Compact messages</span>
@@ -120,6 +123,45 @@
         <label class="field">
           <span>Current focus</span>
           <input id="workspace-focus" type="text" placeholder="Checkpoint 4" />
+        </label>
+        <label class="field">
+          <span>Running task</span>
+          <input id="running-task" type="text" placeholder="Implement session context" />
+        </label>
+        <label class="field">
+          <span>Active file</span>
+          <input id="active-file" type="text" placeholder="app/main.py" />
+        </label>
+        <label class="field">
+          <span>Active tool</span>
+          <input id="active-tool" type="text" placeholder="chat" />
+        </label>
+        <label class="field">
+          <span>Terminal output</span>
+          <textarea id="terminal-output" rows="4" placeholder="Paste recent command output"></textarea>
+        </label>
+        <label class="field">
+          <span>Browser results</span>
+          <textarea id="browser-results" rows="4" placeholder="Paste search or browser notes"></textarea>
+        </label>
+        <label class="field">
+          <span>MCP outputs</span>
+          <textarea id="mcp-outputs" rows="4" placeholder="Paste MCP or tool output"></textarea>
+        </label>
+        <label class="field">
+          <span>Developer instructions</span>
+          <textarea id="developer-instructions" rows="4" placeholder="Project-specific developer notes"></textarea>
+        </label>
+      </section>
+
+      <section>
+        <div class="panel-heading">
+          <h3>Conversation</h3>
+          <button id="new-thread" class="ghost" type="button">New thread</button>
+        </div>
+        <label class="field">
+          <span>Thread</span>
+          <select id="thread-select"></select>
         </label>
       </section>
 

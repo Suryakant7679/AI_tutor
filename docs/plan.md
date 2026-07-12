@@ -102,48 +102,48 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 - [x] Save user and assistant messages
 - [x] Load previous messages
 - [x] Limit LLM context to the most recent messages
-- [ ] Session ID management
-- [ ] Active project tracking
-- [ ] Current workspace tracking
-- [ ] Running task tracking
-- [ ] Active file tracking
-- [ ] Active tool tracking
-- [ ] Token counter
-- [ ] Context window size management
-- [ ] User preferences
-- [ ] Multi-thread chats
-- [ ] Conversation summarization
-- [ ] Conversation compression
-- [ ] Context pruning strategy
-- [ ] Chat recovery
+- [x] Session ID management
+- [x] Active project tracking
+- [x] Current workspace tracking
+- [x] Running task tracking
+- [x] Active file tracking
+- [x] Active tool tracking
+- [x] Token counter
+- [x] Context window size management
+- [x] User preferences
+- [x] Multi-thread chats
+- [x] Conversation summarization
+- [x] Conversation compression
+- [x] Context pruning strategy
+- [x] Chat recovery
 
 ## Checkpoint 7: Memory System
 
-- [ ] Short-term memory for current conversation, files, task, variables, and tool outputs
-- [ ] Long-term memory for user preferences, coding style, projects, commands, and learned behavior
-- [ ] Semantic memory with vector embeddings
-- [ ] Semantic search across conversations and documents
-- [ ] Related conversation retrieval
-- [ ] Similar document retrieval
+- [x] Short-term memory for current conversation, files, task, variables, and tool outputs
+- [x] Long-term memory for user preferences, coding style, projects, commands, and learned behavior
+- [x] Semantic memory with vector embeddings
+- [x] Semantic search across conversations and documents
+- [x] Related conversation retrieval
+- [x] Similar document retrieval
 
 ## Checkpoint 8: Context Builder
 
 - [x] Include recent conversation history in the LLM prompt
 - [x] Include system prompt in model calls
-- [ ] Include uploaded files
-- [ ] Include current project context
-- [ ] Include open files
-- [ ] Include terminal output
-- [ ] Include git status
-- [ ] Include browser results
-- [ ] Include MCP outputs
-- [ ] Include running task state
-- [ ] Include developer instructions
-- [ ] Include user preferences
-- [ ] Rank context
-- [ ] Compress context
-- [ ] Remove duplicate context
-- [ ] Fit context into target model window
+- [x] Include uploaded files
+- [x] Include current project context
+- [x] Include open files
+- [x] Include terminal output
+- [x] Include git status
+- [x] Include browser results
+- [x] Include MCP outputs
+- [x] Include running task state
+- [x] Include developer instructions
+- [x] Include user preferences
+- [x] Rank context
+- [x] Compress context
+- [x] Remove duplicate context
+- [x] Fit context into target model window
 
 ## Checkpoint 9: Planning And Agent Orchestration
 
@@ -193,18 +193,18 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 
 ## Checkpoint 11: RAG Pipeline
 
-- [ ] Document upload
-- [ ] OCR for scanned files
-- [ ] Text cleaning
-- [ ] Chunking
-- [ ] Metadata extraction
-- [ ] Embedding generation
-- [ ] Vector database storage
-- [ ] Hybrid retrieval
-- [ ] Re-ranking
-- [ ] Top K selection
-- [ ] Citation generation
-- [ ] Retrieved context injection into chat
+- [x] Document upload
+- [x] OCR for scanned files
+- [x] Text cleaning
+- [x] Chunking
+- [x] Metadata extraction
+- [x] Embedding generation
+- [x] Vector database storage
+- [x] Hybrid retrieval
+- [x] Re-ranking
+- [x] Top K selection
+- [x] Citation generation
+- [x] Retrieved context injection into chat
 
 ## Checkpoint 12: Response Validation
 

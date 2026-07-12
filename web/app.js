@@ -1,4 +1,10 @@
-let activeConversationId = null;
+const ACTIVE_CONVERSATION_KEY = "aios-active-conversation";
+const ACTIVE_STREAM_KEY = "aios-active-stream";
+const ACTIVE_THREAD_KEY = "aios-active-thread";
+
+let activeConversationId = localStorage.getItem(ACTIVE_CONVERSATION_KEY) || null;
+let activeThreadId = localStorage.getItem(ACTIVE_THREAD_KEY) || "main";
+let activeSessionId = localStorage.getItem("aios-session-id") || "";
 let lastAssistantText = "";
 let recognition = null;
 let speechSynthesisSupported = "speechSynthesis" in window;
@@ -12,7 +18,7 @@ const conversationList = document.querySelector("#conversation-list");
 const newChat = document.querySelector("#new-chat");
 const voiceInputButton = document.querySelector("#voice-input");
 const voiceOutputButton = document.querySelector("#voice-output");
-const cancelStreamButton = document.querySelector("#cancel-stream");
+const sendMessageButton = document.querySelector("#send-message");
 const themeSelect = document.querySelector("#theme-select");
 const fileInput = document.querySelector("#file-input");
 const dropZone = document.querySelector("#drop-zone");
@@ -20,11 +26,21 @@ const attachmentCount = document.querySelector("#attachment-count");
 const artifactList = document.querySelector("#artifact-list");
 const refreshArtifacts = document.querySelector("#refresh-artifacts");
 const providerMode = document.querySelector("#provider-mode");
+const contextWindow = document.querySelector("#context-window");
 const compactMode = document.querySelector("#compact-mode");
 const profileName = document.querySelector("#profile-name");
 const profileRole = document.querySelector("#profile-role");
 const workspaceName = document.querySelector("#workspace-name");
 const workspaceFocus = document.querySelector("#workspace-focus");
+const runningTask = document.querySelector("#running-task");
+const activeFile = document.querySelector("#active-file");
+const activeTool = document.querySelector("#active-tool");
+const terminalOutput = document.querySelector("#terminal-output");
+const browserResults = document.querySelector("#browser-results");
+const mcpOutputs = document.querySelector("#mcp-outputs");
+const developerInstructions = document.querySelector("#developer-instructions");
+const threadSelect = document.querySelector("#thread-select");
+const newThread = document.querySelector("#new-thread");
 const notificationList = document.querySelector("#notification-list");
 const mobileTools = document.querySelector("#mobile-tools");
 const toolsToggle = document.querySelector("#tools-toggle");
@@ -78,6 +94,13 @@ if (dropZone) {
 }
 
 refreshArtifacts.addEventListener("click", loadArtifacts);
+newThread.addEventListener("click", createThread);
+threadSelect.addEventListener("change", () => {
+  setActiveThread(threadSelect.value || "main");
+  if (activeConversationId) {
+    openConversation(activeConversationId);
+  }
+});
 mobileTools.addEventListener("click", () => document.body.classList.toggle("tools-open"));
 toolsToggle.addEventListener("click", () => document.body.classList.toggle("tools-open"));
 closeTools.addEventListener("click", () => document.body.classList.remove("tools-open"));
@@ -88,7 +111,7 @@ input.addEventListener("input", () => {
   input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
 });
 
-[providerMode, compactMode, profileName, profileRole, workspaceName, workspaceFocus].forEach((control) => {
+[providerMode, contextWindow, compactMode, profileName, profileRole, workspaceName, workspaceFocus, runningTask, activeFile, activeTool, terminalOutput, browserResults, mcpOutputs, developerInstructions].forEach((control) => {
   control.addEventListener("change", savePreferences);
   control.addEventListener("input", savePreferences);
 });
@@ -148,6 +171,11 @@ voiceOutputButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (streamController) {
+    streamController.abort();
+    return;
+  }
+
   let content = input.value.trim();
   if (!content && selectedFiles.length) {
     content = "Please review the attached files.";
@@ -161,11 +189,12 @@ form.addEventListener("submit", async (event) => {
   const attachments = selectedFiles.slice();
   selectedFiles = [];
   updateAttachmentCount();
+  lastAssistantText = "";
   appendMessage("user", attachments.length ? `${content}\n\n${fileSummary(attachments)}` : content);
   const pending = appendMessage("assistant", "");
   setMessageProcessing(pending, "Preparing request");
   streamController = new AbortController();
-  cancelStreamButton.hidden = false;
+  setResponseActive(true);
 
   try {
     const uploadedArtifacts = attachments.length ? await uploadFiles(attachments) : [];
@@ -177,7 +206,14 @@ form.addEventListener("submit", async (event) => {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: activeConversationId, message: enrichedContent, stream: true }),
+      body: JSON.stringify({
+        session_id: activeSessionId,
+        conversation_id: activeConversationId,
+        thread_id: activeThreadId,
+        artifact_ids: uploadedArtifacts.map((artifact) => artifact.id),
+        message: enrichedContent,
+        stream: true,
+      }),
       signal: streamController.signal,
     });
 
@@ -189,7 +225,7 @@ form.addEventListener("submit", async (event) => {
 
     await readChatStream(response, pending);
     lastAssistantText = pending.textContent || "";
-    localStorage.removeItem("aios-active-stream");
+    localStorage.removeItem(ACTIVE_STREAM_KEY);
     await loadConversations();
     notify("Reply complete", "The assistant response finished streaming.");
   } catch (error) {
@@ -206,50 +242,55 @@ form.addEventListener("submit", async (event) => {
     input.disabled = false;
     setComposerBusy(false);
     input.focus();
-    cancelStreamButton.hidden = true;
     streamController = null;
-  }
-});
-
-cancelStreamButton.addEventListener("click", () => {
-  if (streamController) {
-    streamController.abort();
+    setResponseActive(false);
   }
 });
 
 newChat.addEventListener("click", async () => {
-  activeConversationId = null;
+  setActiveConversation(null);
+  setActiveThread("main");
   messages.innerHTML = "";
   selectedFiles = [];
   updateAttachmentCount();
   updateEmptyState();
-  localStorage.removeItem("aios-active-stream");
+  localStorage.removeItem(ACTIVE_STREAM_KEY);
   input.value = "";
   input.style.height = "auto";
   input.focus();
 });
 
 async function loadConversations() {
-  const response = await fetch("/api/conversations");
+  const response = await fetch(`/api/conversations?session_id=${encodeURIComponent(activeSessionId)}`);
   const payload = await response.json();
+  const conversations = payload.conversations || [];
   conversationList.innerHTML = "";
 
-  payload.conversations.forEach((conversation) => {
+  conversations.forEach((conversation) => {
     const button = document.createElement("button");
     button.className = "secondary";
     button.textContent = conversation.title;
     button.addEventListener("click", () => openConversation(conversation.id));
     conversationList.appendChild(button);
   });
+  return conversations;
 }
 
 async function openConversation(id) {
   const response = await fetch(`/api/conversations/${id}`);
+  if (!response.ok) {
+    setActiveConversation(null);
+    throw new Error("Conversation not found.");
+  }
   const conversation = await response.json();
-  activeConversationId = id;
-  localStorage.removeItem("aios-active-stream");
+  setActiveConversation(id);
+  setActiveThread(activeThreadId || conversation.active_thread_id || "main");
+  localStorage.removeItem(ACTIVE_STREAM_KEY);
   messages.innerHTML = "";
-  conversation.messages.forEach((message) => appendMessage(message.role, message.content));
+  renderThreads(conversation);
+  conversation.messages
+    .filter((message) => (message.thread_id || "main") === activeThreadId)
+    .forEach((message) => appendMessage(message.role, message.content));
   updateEmptyState();
 }
 
@@ -269,9 +310,16 @@ async function readChatStream(response, pending) {
       try {
         const event = JSON.parse(trimmed);
         if (event.type === "meta") {
-          activeConversationId = event.conversation_id;
+          if (event.session_id) {
+            setActiveSession(event.session_id);
+          }
+          if (event.context_token_count && event.context_window_tokens) {
+            notify("Context ready", `${event.context_token_count}/${event.context_window_tokens} estimated tokens.`);
+          }
+          setActiveConversation(event.conversation_id);
+          setActiveThread(event.thread_id || activeThreadId || "main");
           provider = event.provider || "";
-          localStorage.setItem("aios-active-stream", activeConversationId);
+          localStorage.setItem(ACTIVE_STREAM_KEY, activeConversationId);
           setMessageProcessing(pending, progressText || "Preparing stream", provider);
         } else if (event.type === "progress") {
           progressText = event.message || event.stage || "";
@@ -285,7 +333,7 @@ async function readChatStream(response, pending) {
           updateMessage(pending, assistantText, provider, progressText, true);
         } else if (event.type === "done") {
           progressText = "";
-          localStorage.removeItem("aios-active-stream");
+          localStorage.removeItem(ACTIVE_STREAM_KEY);
           updateMessage(pending, event.message.content || assistantText, provider);
         } else if (event.type === "error") {
           throw new Error(event.error || "Streaming failed.");
@@ -451,33 +499,146 @@ async function uploadFiles(files) {
 }
 
 function buildChatContent(content, artifacts) {
-  const profile = loadJson("aios-profile", {});
-  const workspace = loadJson("aios-workspace", {});
-  const parts = [content];
-  if (profile.name || profile.role) {
-    parts.push(`User profile: ${[profile.name, profile.role].filter(Boolean).join(" - ")}`);
+  if (!artifacts.length) {
+    return content;
   }
-  if (workspace.name || workspace.focus) {
-    parts.push(`Workspace: ${[workspace.name, workspace.focus].filter(Boolean).join(" - ")}`);
-  }
-  if (artifacts.length) {
-    parts.push(
-      "Attached artifacts:\n" +
-        artifacts
-          .map((item) => {
-            const preview = item.preview ? `\nPreview:\n${item.preview.slice(0, 1200)}` : "";
-            return `- ${item.filename} (${item.category}, ${formatBytes(item.size)})${preview}`;
-          })
-          .join("\n")
-    );
-  }
-  return parts.join("\n\n");
+  const summary = artifacts
+    .map((item) => {
+      const textPreview = item.cleaned_text || item.extracted_text || item.preview || "";
+      const metadata = item.metadata || {};
+      const chunkCount = metadata.chunk_count || (item.chunks ? item.chunks.length : 0);
+      const details = [
+        item.category,
+        formatBytes(item.size || 0),
+        item.ocr_status ? `ocr=${item.ocr_status}` : "",
+        chunkCount ? `chunks=${chunkCount}` : "",
+      ].filter(Boolean);
+      const extraction =
+        textPreview
+          ? `\nExtracted text preview:\n${textPreview.slice(0, 1200)}`
+          : "\nExtraction note: No text was extracted from this attachment. If it is an image or scanned file, OCR or vision support is required to summarize visual content.";
+      return `- ${item.filename} (${details.join(", ")})${extraction}`;
+    })
+    .join("\n");
+  return `${content}\n\nAttached artifacts:\n${summary}`;
 }
 
 async function loadArtifacts() {
   const response = await fetch("/api/uploads");
   const payload = await response.json();
   renderArtifacts(payload.artifacts || []);
+}
+
+async function ensureSession() {
+  const query = activeSessionId ? `?session_id=${encodeURIComponent(activeSessionId)}` : "";
+  const response = await fetch(`/api/session${query}`);
+  const payload = await response.json();
+  if (payload.session && payload.session.id) {
+    setActiveSession(payload.session.id);
+    applySessionContext(payload.session);
+  }
+}
+
+function setActiveSession(sessionId) {
+  activeSessionId = sessionId;
+  localStorage.setItem("aios-session-id", sessionId);
+}
+
+function setActiveConversation(conversationId) {
+  activeConversationId = conversationId || null;
+  if (activeConversationId) {
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, activeConversationId);
+  } else {
+    localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+  }
+}
+
+function setActiveThread(threadId) {
+  activeThreadId = threadId || "main";
+  localStorage.setItem(ACTIVE_THREAD_KEY, activeThreadId);
+  if (threadSelect) {
+    threadSelect.value = activeThreadId;
+  }
+}
+
+function renderThreads(conversation) {
+  if (!threadSelect) {
+    return;
+  }
+  const threads = conversation.threads && conversation.threads.length ? conversation.threads : [{ id: "main", title: "Main" }];
+  if (!threads.some((thread) => thread.id === activeThreadId)) {
+    setActiveThread(conversation.active_thread_id || threads[0].id);
+  }
+  threadSelect.innerHTML = threads
+    .map((thread) => `<option value="${escapeHtml(thread.id)}">${escapeHtml(thread.title || "Thread")}</option>`)
+    .join("");
+  threadSelect.value = activeThreadId;
+}
+
+async function createThread() {
+  if (!activeConversationId) {
+    notify("No conversation", "Start or open a conversation before creating a thread.");
+    return;
+  }
+  const response = await fetch(`/api/conversations/${activeConversationId}/threads`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: `Thread ${new Date().toLocaleTimeString()}` }),
+  });
+  const thread = await response.json();
+  if (!response.ok) {
+    notify("Thread error", thread.error || "Could not create thread.");
+    return;
+  }
+  setActiveThread(thread.id);
+  messages.innerHTML = "";
+  updateEmptyState();
+  await openConversation(activeConversationId);
+}
+
+function applySessionContext(session) {
+  const localWorkspace = loadJson("aios-workspace", {});
+  const localSettings = loadJson("aios-settings", {});
+  const preferences = session.user_preferences || {};
+  const workspace = session.current_workspace || {};
+  const activeProject = session.active_project || workspace.name || "";
+  if (!localSettings.providerMode && preferences.provider_mode) {
+    providerMode.value = preferences.provider_mode;
+  }
+  if (!localSettings.contextWindow && preferences.context_window_tokens) {
+    contextWindow.value = preferences.context_window_tokens;
+  }
+  if (localSettings.compactMode === undefined && preferences.compact_mode !== undefined) {
+    compactMode.checked = Boolean(preferences.compact_mode);
+  }
+  if (!localWorkspace.name && activeProject) {
+    workspaceName.value = activeProject;
+  }
+  if (!localWorkspace.focus && workspace.focus) {
+    workspaceFocus.value = workspace.focus;
+  }
+  if (!localWorkspace.runningTask && session.running_task) {
+    runningTask.value = session.running_task;
+  }
+  if (!localWorkspace.activeFile && session.active_file) {
+    activeFile.value = session.active_file;
+  }
+  if (!localWorkspace.activeTool && session.active_tool) {
+    activeTool.value = session.active_tool;
+  }
+  if (!localWorkspace.terminalOutput && session.terminal_output) {
+    terminalOutput.value = session.terminal_output;
+  }
+  if (!localWorkspace.browserResults && session.browser_results) {
+    browserResults.value = session.browser_results;
+  }
+  if (!localWorkspace.mcpOutputs && session.mcp_outputs) {
+    mcpOutputs.value = session.mcp_outputs;
+  }
+  if (!localWorkspace.developerInstructions && session.developer_instructions) {
+    developerInstructions.value = session.developer_instructions;
+  }
+  savePreferences({ persistSession: false });
 }
 
 function renderArtifacts(artifacts) {
@@ -490,6 +651,13 @@ function renderArtifacts(artifacts) {
     const card = document.createElement("article");
     card.className = "artifact";
     const url = `/api/uploads/${item.id}/content`;
+    const textPreview = item.cleaned_text || item.extracted_text || item.preview || "";
+    const ocrStatus = item.ocr_status ? `<small>OCR: ${escapeHtml(item.ocr_status)}</small>` : "";
+    const metadata = item.metadata || {};
+    const chunkCount = metadata.chunk_count || (item.chunks ? item.chunks.length : 0);
+    const chunkStatus = chunkCount ? `<small>${chunkCount} chunk${chunkCount === 1 ? "" : "s"}</small>` : "";
+    const vectorCount = metadata.vector_count || 0;
+    const vectorStatus = vectorCount ? `<small>${vectorCount} vector${vectorCount === 1 ? "" : "s"}</small>` : "";
     const preview =
       item.category === "image"
         ? `<img src="${url}" alt="${escapeHtml(item.filename)}" />`
@@ -497,10 +665,16 @@ function renderArtifacts(artifacts) {
           ? `<audio src="${url}" controls></audio>`
           : item.category === "pdf"
             ? `<a href="${url}" target="_blank" rel="noreferrer">Open PDF</a>`
-            : item.preview
-              ? `<small>${escapeHtml(item.preview.slice(0, 160))}</small>`
+            : textPreview
+              ? `<small>${escapeHtml(textPreview.slice(0, 160))}</small>`
               : "";
-    card.innerHTML = `<strong>${escapeHtml(item.filename)}</strong><small>${item.category} - ${formatBytes(item.size)}</small>${preview}`;
+    const extractedPreview =
+      item.category === "image" || item.category === "pdf"
+        ? textPreview
+          ? `<small>${escapeHtml(textPreview.slice(0, 160))}</small>`
+          : ""
+        : "";
+    card.innerHTML = `<strong>${escapeHtml(item.filename)}</strong><small>${item.category} - ${formatBytes(item.size)}</small>${ocrStatus}${chunkStatus}${vectorStatus}${preview}${extractedPreview}`;
     artifactList.appendChild(card);
   });
 }
@@ -510,19 +684,91 @@ function loadPreferences() {
   const profile = loadJson("aios-profile", {});
   const workspace = loadJson("aios-workspace", {});
   providerMode.value = settings.providerMode || "auto";
+  contextWindow.value = settings.contextWindow || 4000;
   compactMode.checked = Boolean(settings.compactMode);
   profileName.value = profile.name || "";
   profileRole.value = profile.role || "";
   workspaceName.value = workspace.name || "";
   workspaceFocus.value = workspace.focus || "";
+  runningTask.value = workspace.runningTask || "";
+  activeFile.value = workspace.activeFile || "";
+  activeTool.value = workspace.activeTool || "";
+  terminalOutput.value = workspace.terminalOutput || "";
+  browserResults.value = workspace.browserResults || "";
+  mcpOutputs.value = workspace.mcpOutputs || "";
+  developerInstructions.value = workspace.developerInstructions || "";
   document.body.classList.toggle("compact", compactMode.checked);
 }
 
-function savePreferences() {
-  localStorage.setItem("aios-settings", JSON.stringify({ providerMode: providerMode.value, compactMode: compactMode.checked }));
+function savePreferences(options = {}) {
+  const persistSession = options.persistSession !== false;
+  localStorage.setItem(
+    "aios-settings",
+    JSON.stringify({
+      providerMode: providerMode.value,
+      compactMode: compactMode.checked,
+      contextWindow: normalizedContextWindow(),
+    })
+  );
   localStorage.setItem("aios-profile", JSON.stringify({ name: profileName.value.trim(), role: profileRole.value.trim() }));
-  localStorage.setItem("aios-workspace", JSON.stringify({ name: workspaceName.value.trim(), focus: workspaceFocus.value.trim() }));
+  localStorage.setItem(
+    "aios-workspace",
+    JSON.stringify({
+      name: workspaceName.value.trim(),
+      focus: workspaceFocus.value.trim(),
+      runningTask: runningTask.value.trim(),
+      activeFile: activeFile.value.trim(),
+      activeTool: activeTool.value.trim(),
+      terminalOutput: terminalOutput.value.trim(),
+      browserResults: browserResults.value.trim(),
+      mcpOutputs: mcpOutputs.value.trim(),
+      developerInstructions: developerInstructions.value.trim(),
+    })
+  );
   document.body.classList.toggle("compact", compactMode.checked);
+  if (persistSession) {
+    syncSessionContext();
+  }
+}
+
+async function syncSessionContext() {
+  if (!activeSessionId) {
+    return;
+  }
+  const workspace = loadJson("aios-workspace", {});
+  try {
+    const response = await fetch("/api/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: activeSessionId,
+        active_project: workspace.name || "",
+        current_workspace: {
+          name: workspace.name || "",
+          focus: workspace.focus || "",
+        },
+        running_task: workspace.runningTask || "",
+        active_file: workspace.activeFile || "",
+        open_files: splitOpenFiles(workspace.activeFile || ""),
+        active_tool: workspace.activeTool || "",
+        terminal_output: workspace.terminalOutput || "",
+        browser_results: workspace.browserResults || "",
+        mcp_outputs: workspace.mcpOutputs || "",
+        developer_instructions: workspace.developerInstructions || "",
+        user_preferences: {
+          provider_mode: providerMode.value,
+          compact_mode: compactMode.checked,
+          context_window_tokens: normalizedContextWindow(),
+        },
+      }),
+    });
+    const payload = await response.json();
+    if (payload.session && payload.session.id) {
+      setActiveSession(payload.session.id);
+    }
+  } catch (error) {
+    console.error("Could not sync session context", error);
+  }
 }
 
 function loadJson(key, fallback) {
@@ -531,6 +777,21 @@ function loadJson(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function normalizedContextWindow() {
+  const value = Number.parseInt(contextWindow.value, 10);
+  if (Number.isNaN(value)) {
+    return 4000;
+  }
+  return Math.max(500, Math.min(value, 128000));
+}
+
+function splitOpenFiles(value) {
+  return String(value || "")
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function notify(title, detail) {
@@ -553,6 +814,17 @@ function setComposerBusy(isBusy) {
   }
 }
 
+function setResponseActive(isActive) {
+  if (!sendMessageButton) {
+    return;
+  }
+
+  sendMessageButton.classList.toggle("danger-action", isActive);
+  sendMessageButton.classList.toggle("stop-action", isActive);
+  sendMessageButton.setAttribute("aria-label", isActive ? "Stop response" : "Send message");
+  sendMessageButton.textContent = isActive ? "■" : "↑";
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -560,10 +832,10 @@ function formatBytes(bytes) {
 }
 
 async function recoverInterruptedStream() {
-  const recoveryId = localStorage.getItem("aios-active-stream") || activeConversationId;
+  const recoveryId = localStorage.getItem(ACTIVE_STREAM_KEY) || activeConversationId;
   if (!recoveryId) return;
 
-  localStorage.removeItem("aios-active-stream");
+  localStorage.removeItem(ACTIVE_STREAM_KEY);
   try {
     await openConversation(recoveryId);
     await loadConversations();
@@ -573,13 +845,25 @@ async function recoverInterruptedStream() {
 }
 
 async function boot() {
-  await loadConversations();
+  await ensureSession();
+  await syncSessionContext();
+  const conversations = await loadConversations();
   await loadArtifacts();
   renderNotifications();
   updateEmptyState();
-  const recoveryId = localStorage.getItem("aios-active-stream");
+  const recoveryId = localStorage.getItem(ACTIVE_STREAM_KEY);
   if (recoveryId) {
     await recoverInterruptedStream();
+  } else if (activeConversationId && conversations.some((conversation) => conversation.id === activeConversationId)) {
+    try {
+      await openConversation(activeConversationId);
+    } catch (error) {
+      console.error("Could not restore active conversation", error);
+      setActiveConversation(null);
+      updateEmptyState();
+    }
+  } else if (activeConversationId) {
+    setActiveConversation(null);
   }
 }
 

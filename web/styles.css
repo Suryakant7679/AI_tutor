@@ -462,6 +462,15 @@ textarea::placeholder {
   color: var(--danger);
 }
 
+.send-action.stop-action {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.send-action.stop-action:hover {
+  background: var(--danger);
+}
+
 .secondary-action.active,
 .round-action.active {
   color: var(--text);
