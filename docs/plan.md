@@ -147,49 +147,49 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 
 ## Checkpoint 9: Planning And Agent Orchestration
 
-- [ ] Planner agent
-- [ ] Task classification
-- [ ] Complexity analysis
-- [ ] Subtask generation
-- [ ] Tool requirement detection
-- [ ] Dependency estimation
-- [ ] LangGraph orchestrator
-- [ ] Decision node routing
-- [ ] Memory agent
-- [ ] RAG agent
-- [ ] Browser agent
-- [ ] Coding agent
-- [ ] Terminal agent
-- [ ] Filesystem agent
-- [ ] Vision agent
-- [ ] Database agent
-- [ ] Tool agent
-- [ ] Reflection agent
-- [ ] Reviewer agent
-- [ ] Retry failed tasks
-- [ ] Merge agent results into final output
+- [x] Planner agent
+- [x] Task classification
+- [x] Complexity analysis
+- [x] Subtask generation
+- [x] Tool requirement detection
+- [x] Dependency estimation
+- [x] LangGraph orchestrator
+- [x] Decision node routing
+- [x] Memory agent
+- [x] RAG agent
+- [x] Browser agent
+- [x] Coding agent
+- [x] Terminal agent
+- [x] Filesystem agent
+- [x] Vision agent
+- [x] Database agent
+- [x] Tool agent
+- [x] Reflection agent
+- [x] Reviewer agent
+- [x] Retry failed tasks
+- [x] Merge agent results into final output
 
 ## Checkpoint 10: MCP And Tool Router
 
-- [ ] MCP router
-- [ ] Tool request classification
-- [ ] Filesystem MCP
-- [ ] Python MCP
-- [ ] Terminal MCP
-- [ ] Browser MCP
-- [ ] Git MCP
-- [ ] GitHub MCP
-- [ ] Docker MCP
-- [ ] Kubernetes MCP
-- [ ] PostgreSQL MCP
-- [ ] SQLite MCP
-- [ ] Redis MCP
-- [ ] Cloud provider MCP integrations
-- [ ] Communication and productivity MCP integrations
-- [ ] REST API MCP
-- [ ] OCR MCP
-- [ ] Image processing MCP
-- [ ] Custom MCP server support
+- [x] MCP router
+- [x] Tool request classification
+- [x] Filesystem MCP
+- [x] Python MCP
+- [x] Terminal MCP
+- [x] Browser MCP
+- [x] Git MCP
+- [x] GitHub MCP
+- [x] Docker MCP
+- [x] Kubernetes MCP
+- [x] PostgreSQL MCP
+- [x] SQLite MCP
+- [x] Redis MCP
+- [x] Cloud provider MCP integrations
+- [x] Communication and productivity MCP integrations
+- [x] REST API MCP
+- [x] OCR MCP
+- [x] Image processing MCP
+- [x] Custom MCP server support
 
 ## Checkpoint 11: RAG Pipeline
 
@@ -208,16 +208,16 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 
 ## Checkpoint 12: Response Validation
 
-- [ ] Markdown validation
-- [ ] JSON validation
-- [ ] Code validation
-- [ ] Hallucination checks
-- [ ] Tool output verification
-- [ ] Missing information checks
-- [ ] Citation checks
-- [ ] Safety checks
-- [ ] Grammar checks
-- [ ] Formatting checks
+- [x] Markdown validation
+- [x] JSON validation
+- [x] Code validation
+- [x] Hallucination checks
+- [x] Tool output verification
+- [x] Missing information checks
+- [x] Citation checks
+- [x] Safety checks
+- [x] Grammar checks
+- [x] Formatting checks
 
 ## Checkpoint 13: Data Layer
 

@@ -79,6 +79,8 @@ The app loads `.env` on startup. Restart the server after changing provider keys
 | `AIOS_LLM_TIMEOUT` | Provider request timeout in seconds. |
 | `AIOS_LLM_RETRIES` | Retry count for non-streaming calls. |
 | `AIOS_USAGE_FILE` | JSON usage ledger. Defaults to `data/llm_usage.json`. |
+| `AIOS_ENABLED_VALIDATORS` | Optional comma-separated allowlist of response validator class names. All validators run by default. |
+| `AIOS_DISABLED_VALIDATORS` | Optional comma-separated response validator class names to disable. |
 
 Task routes can override the global provider/model with variables such as
 `AIOS_CODING_PROVIDER` and `AIOS_CODING_GROQ_MODEL`. The same pattern applies
@@ -108,6 +110,7 @@ AI_tutor/
   app/
     config.py        .env loading and configured key detection
     llm.py           provider calls, fallback, streaming parsers
+    validation.py    ordered response validation, repair, retry, and validator plugins
     main.py          HTTP server, API routes, static file serving
     migrate.py       versioned PostgreSQL migration runner
     store.py         local JSON conversation storage
@@ -139,6 +142,8 @@ AI_tutor/
 | `POST` | `/api/conversations` | Creates a new conversation. |
 | `GET` | `/api/conversations/{id}` | Loads one conversation and its messages. |
 | `POST` | `/api/chat` | Sends a user message and returns a normal or streaming assistant reply. |
+| `POST` | `/api/plan` | Classifies an objective and returns complexity, subtasks, dependencies, tools, and success criteria. |
+| `POST` | `/api/orchestrate` | Plans, routes, and executes supported specialist agents through LangGraph. |
 
 Streaming chat responses use newline-delimited JSON events:
 

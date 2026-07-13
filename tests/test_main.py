@@ -3,6 +3,9 @@ os.environ.setdefault("AIOS_VECTOR_BACKEND", "json")
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from PIL import Image
 
 from app.llm import gemini_models_to_try, parse_chat_completion_stream_event, parse_gemini_stream_event
 from app.model_router import EnvironmentModelRouter
@@ -12,6 +15,46 @@ from app.postgres_store import PostgreSQLConversationStore
 from app.storage import create_store
 from app.redis_state import RedisState
 from app.vector_store import JsonVectorStore
+from app.mcp.filesystem_tools import WorkspaceFilesystem
+from app.mcp.python_tools import run_restricted_python
+from app.mcp.router import MCPRouter
+from app.mcp.browser_tools import validate_public_url
+from app.mcp.docker_tools import _safe_name
+from app.mcp.git_tools import GitInspector
+from app.mcp.github_tools import GitHubReader
+from app.mcp.terminal_tools import run_terminal
+from app.mcp.sql_tools import validate_read_only_sql
+from app.mcp.sqlite_tools import SQLiteReader
+from app.mcp.kubernetes_tools import _safe as safe_kubernetes_name
+from app.mcp.cloud_tools import CloudReader
+from app.mcp.custom_tools import CustomMCPRegistry
+from app.mcp.image_tools import ImageProcessor
+from app.mcp.ocr_tools import OCRReader
+from app.mcp.productivity_tools import ProductivityReader
+from app.mcp.rest_tools import validate_rest_request
+from app.agents.planner import (
+    ComplexityAnalyzer,
+    DependencyEstimator,
+    PlannedSubtask,
+    PlannerAgent,
+    TaskClassifier,
+    ToolRequirementDetector,
+)
+from app.agents.orchestrator import DecisionRouter, LangGraphOrchestrator
+from app.agents.specialists import (
+    BrowserAgent,
+    CodingAgent,
+    DatabaseAgent,
+    FilesystemAgent,
+    MemoryAgent,
+    RAGAgent,
+    ReflectionAgent,
+    ReviewerAgent,
+    SpecialistAgentRegistry,
+    TerminalAgent,
+    ToolAgent,
+    VisionAgent,
+)
 from app.main import (
     artifact_category,
     browser_results_context_text,
@@ -287,6 +330,432 @@ class VectorStoreTests(unittest.TestCase):
             store.upsert([{"id": "m1", "source_type": "memory", "embedding": [1.0] * 8}])
             store.replace_source("memory", [{"id": "m2", "source_type": "memory", "embedding": [0.5] * 8}])
             self.assertEqual({item["id"] for item in store.load()}, {"d1", "m2"})
+
+
+class PlannerAgentTests(unittest.TestCase):
+    def test_classifier_identifies_category_intent_and_tool_requirement(self) -> None:
+        result = TaskClassifier().classify("Fix the PostgreSQL query bug and run tests")
+        self.assertEqual(result.category, "data")
+        self.assertEqual(result.intent, "debug")
+        self.assertTrue(result.requires_tools)
+        self.assertIn("coding", result.domains)
+
+    def test_complexity_analysis_distinguishes_focused_and_cross_domain_work(self) -> None:
+        classifier = TaskClassifier()
+        analyzer = ComplexityAnalyzer()
+        simple = classifier.classify("Explain recursion")
+        self.assertEqual(analyzer.analyze("Explain recursion", simple).level, "simple")
+        objective = "Migrate the production PostgreSQL authentication schema, update the API, add tests, and deploy it without downtime"
+        complex_classification = classifier.classify(objective)
+        result = analyzer.analyze(objective, complex_classification)
+        self.assertEqual(result.level, "complex")
+        self.assertIn("production impact", result.risk_flags)
+        self.assertIn("security-sensitive", result.risk_flags)
+
+    def test_planner_generates_dependency_aware_verifiable_subtasks(self) -> None:
+        plan = PlannerAgent().plan("Fix the API bug and run the test suite")
+        self.assertEqual(plan.classification.intent, "debug")
+        self.assertEqual(len(plan.subtasks), 3)
+        self.assertEqual(plan.subtasks[1].dependencies, ["step-1"])
+        self.assertEqual(plan.subtasks[2].dependencies, ["step-2"])
+        self.assertIn("aios-filesystem", plan.subtasks[0].suggested_tools)
+        self.assertTrue(all(item.success_criteria for item in plan.subtasks))
+
+    def test_planner_is_deterministic_and_preserves_context(self) -> None:
+        planner = PlannerAgent()
+        context = {"project": "AIOS", "active_file": "app/main.py"}
+        first = planner.plan("Implement a Python function", context)
+        second = planner.plan("Implement a Python function", context)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.context, context)
+        self.assertEqual(first.to_dict()["classification"]["category"], "coding")
+
+    def test_planner_rejects_empty_or_oversized_objectives(self) -> None:
+        planner = PlannerAgent()
+        with self.assertRaises(ValueError): planner.plan("  ")
+        with self.assertRaises(ValueError): planner.plan("x" * 8001)
+
+    def test_tool_detector_returns_specific_capabilities_and_availability(self) -> None:
+        objective = "Inspect Kubernetes pod logs and post a summary to Slack"
+        classification = TaskClassifier().classify(objective)
+        requirements = ToolRequirementDetector().detect(
+            objective,
+            classification,
+            {"available_mcp_servers": ["aios-kubernetes"]},
+        )
+        by_server = {item.server: item for item in requirements}
+        self.assertIn("kubernetes_logs", by_server["aios-kubernetes"].tools)
+        self.assertTrue(by_server["aios-kubernetes"].available)
+        self.assertFalse(by_server["aios-productivity"].available)
+        self.assertEqual(by_server["aios-productivity"].access, "read")
+
+    def test_dependency_estimator_builds_batches_and_detects_cycles(self) -> None:
+        independent = [
+            PlannedSubtask("a", "A", "A", "general"),
+            PlannedSubtask("b", "B", "B", "general"),
+            PlannedSubtask("c", "C", "C", "general", ["a", "b"]),
+        ]
+        _, graph = DependencyEstimator().estimate(independent)
+        self.assertEqual(graph.execution_batches, [["a", "b"], ["c"]])
+        self.assertFalse(graph.has_cycle)
+        cyclic = [
+            PlannedSubtask("a", "A", "A", "general", ["b"]),
+            PlannedSubtask("b", "B", "B", "general", ["a"]),
+        ]
+        _, cyclic_graph = DependencyEstimator().estimate(cyclic)
+        self.assertTrue(cyclic_graph.has_cycle)
+
+
+class LangGraphOrchestratorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.orchestrator = LangGraphOrchestrator()
+
+    def test_langgraph_contains_planning_decision_and_route_nodes(self) -> None:
+        nodes = set(self.orchestrator.graph.get_graph().nodes)
+        self.assertTrue({"plan_task", "decision", "prepare_tools", "direct_response", "blocked"} <= nodes)
+        self.assertTrue({"memory_agent", "rag_agent", "browser_agent", "coding_agent", "terminal_agent", "filesystem_agent"} <= nodes)
+        self.assertTrue({"retry_decision", "retry_agent", "reviewer_agent", "merge_results"} <= nodes)
+
+    def test_routes_tool_tasks_and_returns_dependency_queue(self) -> None:
+        result = self.orchestrator.invoke("Fix the API bug and run tests")
+        self.assertEqual(result["route"], "tool_execution")
+        self.assertEqual(result["next_node"], "complete")
+        self.assertEqual(result["selected_agent"], "coding")
+        self.assertEqual(result["agent_output"]["agent"], "coding")
+        self.assertEqual(result["trace"], ["plan_task", "decision", "prepare_tools", "agent_dispatch", "coding_agent", "post_reflection", "retry_decision", "reviewer_agent", "merge_results"])
+        self.assertEqual(result["reflection"]["output"]["verdict"], "passed")
+        self.assertEqual(result["review"]["output"]["verdict"], "approved")
+        self.assertEqual(result["final_result"]["attempt_count"], 1)
+        self.assertEqual(result["execution_queue"][0], ["step-1"])
+
+    def test_routes_ambiguous_risky_blocked_and_direct_tasks(self) -> None:
+        clarification = self.orchestrator.invoke("fix it")
+        self.assertEqual(clarification["status"], "awaiting_input")
+        approval = self.orchestrator.invoke("Deploy Kubernetes to production")
+        self.assertEqual(approval["status"], "awaiting_approval")
+        blocked = self.orchestrator.invoke(
+            "Browse the website https://example.com",
+            {"available_mcp_servers": ["aios-filesystem"]},
+        )
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn("aios-browser", blocked["missing_tools"])
+        direct = self.orchestrator.invoke("Hello there")
+        self.assertEqual(direct["route"], "direct_response")
+        self.assertEqual(direct["next_node"], "general_agent")
+
+    def test_router_allows_explicitly_approved_risk(self) -> None:
+        plan = PlannerAgent().plan_dict("Deploy Kubernetes to production", {"approved": True})
+        decision = DecisionRouter().decide(plan, {"approved": True})
+        self.assertEqual(decision["route"], "tool_execution")
+
+    def test_dispatches_memory_and_rag_agents(self) -> None:
+        memory = self.orchestrator.invoke("Recall my preferences", {"long_term_memory": {"theme": "dark"}})
+        self.assertEqual(memory["selected_agent"], "memory")
+        self.assertEqual(memory["agent_output"]["output"]["long_term"]["theme"], "dark")
+        rag = self.orchestrator.invoke(
+            "Search my uploaded documents for apples",
+            {"vector_records": [{"id": "one", "source_type": "document", "filename": "fruit.txt", "text": "apples and pears"}]},
+        )
+        self.assertEqual(rag["selected_agent"], "rag")
+        self.assertEqual(rag["agent_output"]["output"]["citations"][0]["id"], "one")
+
+
+class SpecialistAgentTests(unittest.TestCase):
+    def test_memory_agent_recalls_and_updates_persistent_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ConversationStore(Path(temp_dir) / "conversations.json")
+            conversation = store.create_conversation()
+            agent = MemoryAgent(store)
+            remembered = agent.execute("remember", {"operation": "remember", "learned_behavior": ["prefers concise replies"]}, {})
+            self.assertEqual(remembered["status"], "completed")
+            recalled = agent.execute("recall", {"conversation_id": conversation["id"]}, {})
+            self.assertIn("prefers concise replies", recalled["output"]["long_term"]["learned_behavior"])
+
+    def test_rag_agent_ranks_records_and_returns_citations(self) -> None:
+        records = [
+            {"id": "a", "source_type": "document", "filename": "a.txt", "text": "oranges only"},
+            {"id": "b", "source_type": "document", "filename": "b.txt", "text": "apples are red fruit"},
+        ]
+        result = RAGAgent().execute("find apples", {"query": "apples", "top_k": 1}, {"vector_records": records})
+        self.assertEqual(result["output"]["results"][0]["id"], "b")
+        self.assertEqual(result["output"]["citations"][0]["filename"], "b.txt")
+
+    def test_browser_and_terminal_agents_use_injected_safe_primitives(self) -> None:
+        browser = BrowserAgent(fetcher=lambda url, limit: {"url": url, "content": "ok", "limit": limit})
+        browsed = browser.execute("browse https://example.com", {}, {})
+        self.assertEqual(browsed["output"]["content"], "ok")
+        terminal = TerminalAgent(runner=lambda command, args, timeout: {"ok": True, "command": command, "args": args, "timeout": timeout})
+        executed = terminal.execute("run", {"command": "rg", "args": ["TODO"], "timeout": 5}, {})
+        self.assertTrue(executed["output"]["ok"])
+
+    def test_filesystem_and_coding_agents_execute_scoped_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            filesystem = WorkspaceFilesystem(root, allow_write=True)
+            fs_agent = FilesystemAgent(filesystem)
+            found = fs_agent.execute("search", {"operation": "search", "query": "value"}, {})
+            self.assertEqual(found["output"][0]["path"], "app.py")
+            coding = CodingAgent(filesystem, GitInspector(root), TerminalAgent(runner=lambda command, args, timeout: {"ok": True}))
+            changed = coding.execute("update code", {"operation": "apply_changes", "changes": {"app.py": "value = 2\n"}}, {})
+            self.assertEqual(changed["status"], "completed")
+            self.assertEqual((root / "app.py").read_text(encoding="utf-8"), "value = 2\n")
+
+    def test_registry_converts_agent_errors_to_structured_failures(self) -> None:
+        registry = SpecialistAgentRegistry(filesystem=FilesystemAgent(WorkspaceFilesystem(Path.cwd(), allow_write=False)))
+        result = registry.execute("filesystem", "write", {"operation": "write", "path": "blocked.txt", "content": "x"}, {})
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("disabled", result["message"])
+
+    def test_vision_agent_inspects_and_transforms_images(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            Image.new("RGB", (20, 10), "blue").save(root / "source.png")
+            processor = ImageProcessor(root, allow_write=True)
+            agent = VisionAgent(processor, OCRReader(root))
+            info = agent.execute("inspect image", {"operation": "info", "path": "source.png"}, {})
+            self.assertEqual(info["output"]["width"], 20)
+            transformed = agent.execute("resize image", {"operation": "transform", "path": "source.png", "output_path": "small.png", "width": 10}, {})
+            self.assertEqual((transformed["output"]["width"], transformed["output"]["height"]), (10, 5))
+
+    def test_database_agent_uses_read_only_provider_interface(self) -> None:
+        class FakeDatabase:
+            def tables(self): return [{"name": "notes"}]
+            def query(self, sql, parameters, limit): return {"rows": [{"sql": sql}], "row_count": 1}
+
+        agent = DatabaseAgent({"sqlite": FakeDatabase})
+        tables = agent.execute("inspect SQLite", {"provider": "sqlite", "operation": "tables"}, {})
+        self.assertEqual(tables["output"]["result"][0]["name"], "notes")
+        queried = agent.execute("query SQLite", {"provider": "sqlite", "operation": "query", "sql": "SELECT 1"}, {})
+        self.assertEqual(queried["output"]["result"]["row_count"], 1)
+
+    def test_tool_agent_invokes_only_registered_tools(self) -> None:
+        agent = ToolAgent({"double": lambda value: value * 2})
+        result = agent.execute("use tool", {"tool": "double", "arguments": {"value": 4}}, {})
+        self.assertEqual(result["output"]["result"], 8)
+        registry = SpecialistAgentRegistry(tool=agent)
+        blocked = registry.execute("tool", "use tool", {"tool": "unknown"}, {})
+        self.assertEqual(blocked["status"], "failed")
+
+    def test_reflection_agent_reviews_failures_and_success_criteria(self) -> None:
+        plan = {"subtasks": [{"id": "step-1", "success_criteria": "Tests pass"}]}
+        passed = ReflectionAgent().execute("verify", {"agent_output": {"agent": "coding", "status": "completed", "output": {"ok": True}}, "plan": plan}, {})
+        self.assertEqual(passed["output"]["verdict"], "passed")
+        failed = ReflectionAgent().execute("verify", {"agent_output": {"agent": "terminal", "status": "failed", "output": None}, "plan": plan}, {})
+        self.assertEqual(failed["output"]["verdict"], "failed")
+
+    def test_reviewer_agent_approves_success_and_rejects_failure(self) -> None:
+        plan = {"subtasks": [{"id": "step-1", "success_criteria": "Tests pass"}]}
+        output = {"agent": "coding", "status": "completed", "output": {"tests": "passed"}}
+        reflection = ReflectionAgent().execute("verify", {"agent_output": output, "plan": plan}, {})
+        approved = ReviewerAgent().execute("verify", {"agent_output": output, "reflection": reflection, "plan": plan}, {})
+        self.assertEqual(approved["output"]["verdict"], "approved")
+        failed_output = {"agent": "coding", "status": "failed", "output": None}
+        failed_reflection = ReflectionAgent().execute("verify", {"agent_output": failed_output, "plan": plan}, {})
+        rejected = ReviewerAgent().execute("verify", {"agent_output": failed_output, "reflection": failed_reflection, "plan": plan}, {})
+        self.assertEqual(rejected["output"]["verdict"], "rejected")
+
+
+class NewSpecialistRoutingTests(unittest.TestCase):
+    def test_orchestrator_dispatches_vision_database_tool_and_reflection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            Image.new("RGB", (8, 6), "green").save(root / "image.png")
+
+            class FakeDatabase:
+                def tables(self): return [{"name": "items"}]
+
+            registry = SpecialistAgentRegistry(
+                vision=VisionAgent(ImageProcessor(root, allow_write=False), OCRReader(root)),
+                database=DatabaseAgent({"sqlite": FakeDatabase}),
+                tool=ToolAgent({"echo": lambda value: value}),
+            )
+            orchestrator = LangGraphOrchestrator(agents=registry)
+            vision = orchestrator.invoke("Inspect this image", {"agent_input": {"operation": "info", "path": "image.png"}})
+            self.assertEqual(vision["selected_agent"], "vision")
+            database = orchestrator.invoke("Inspect SQLite tables", {"agent_input": {"provider": "sqlite", "operation": "tables"}})
+            self.assertEqual(database["selected_agent"], "database")
+            tool = orchestrator.invoke("Use a tool", {"agent_input": {"tool": "echo", "arguments": {"value": "ok"}}})
+            self.assertEqual(tool["selected_agent"], "tool")
+            reflected = orchestrator.invoke("Review the result", {"agent_output": {"agent": "tool", "status": "completed", "output": "ok"}})
+            self.assertEqual(reflected["selected_agent"], "reflection")
+
+
+class RetryAndMergeTests(unittest.TestCase):
+    def test_failed_agent_is_retried_and_then_approved(self) -> None:
+        class FlakyCodingAgent:
+            def __init__(self): self.calls = 0
+            def execute(self, objective, payload, context):
+                self.calls += 1
+                return {"agent": "coding", "status": "failed", "message": "temporary", "output": None} if self.calls == 1 else {"agent": "coding", "status": "completed", "message": "recovered", "output": {"ok": True}}
+
+        flaky = FlakyCodingAgent()
+        orchestrator = LangGraphOrchestrator(agents=SpecialistAgentRegistry(coding=flaky))
+        result = orchestrator.invoke("Fix the API bug", {"max_retries": 2})
+        self.assertEqual(flaky.calls, 2)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["retry_count"], 1)
+        self.assertEqual(result["final_result"]["attempt_count"], 2)
+        self.assertIn("retry_agent", result["trace"])
+
+    def test_retry_exhaustion_is_rejected(self) -> None:
+        class FailingCodingAgent:
+            def __init__(self): self.calls = 0
+            def execute(self, objective, payload, context):
+                self.calls += 1
+                return {"agent": "coding", "status": "failed", "message": "still failing", "output": None}
+
+        failing = FailingCodingAgent()
+        orchestrator = LangGraphOrchestrator(agents=SpecialistAgentRegistry(coding=failing))
+        result = orchestrator.invoke("Fix the API bug", {"max_retries": 2})
+        self.assertEqual(failing.calls, 3)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["review"]["output"]["verdict"], "rejected")
+        self.assertEqual(result["final_result"]["retry_count"], 2)
+
+    def test_merge_includes_prior_agent_results(self) -> None:
+        prior = {"attempt": 0, "agent": "memory", "status": "completed", "message": "context", "output": {"remembered": True}}
+        result = LangGraphOrchestrator().invoke("Recall my preferences", {"long_term_memory": {"theme": "dark"}, "agent_results": [prior]})
+        self.assertEqual(result["final_result"]["attempt_count"], 2)
+        self.assertEqual(result["final_result"]["agent_results"][0]["agent"], "memory")
+
+    def test_invalid_retry_limit_is_rejected(self) -> None:
+        with self.assertRaises(ValueError): LangGraphOrchestrator().invoke("Recall memory", {"max_retries": "many"})
+
+
+class MCPRouterTests(unittest.TestCase):
+    def test_classifies_filesystem_and_python_requests(self) -> None:
+        router = MCPRouter()
+        self.assertEqual(router.classify("read the project file").server, "aios-filesystem")
+        self.assertEqual(router.classify("calculate statistics with Python").server, "aios-python")
+        self.assertEqual(router.classify("hello there").category, "general")
+
+    def test_filesystem_is_confined_and_protects_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "safe.txt").write_text("hello world", encoding="utf-8")
+            filesystem = WorkspaceFilesystem(root)
+            self.assertEqual(filesystem.read_file("safe.txt")["content"], "hello world")
+            with self.assertRaises(ValueError): filesystem.resolve("../outside.txt", must_exist=False)
+            with self.assertRaises(ValueError): filesystem.resolve(".env", must_exist=False)
+
+    def test_filesystem_writes_are_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(PermissionError): WorkspaceFilesystem(temp_dir, allow_write=False).write_file("new.txt", "data")
+            result = WorkspaceFilesystem(temp_dir, allow_write=True).write_file("new.txt", "data")
+            self.assertEqual(result["bytes_written"], 4)
+
+    def test_restricted_python_returns_results_and_blocks_imports(self) -> None:
+        result = run_restricted_python("values = [1, 2, 3]\nresult = sum(values)")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["result"], 6)
+        blocked = run_restricted_python("import os\nresult = os.getcwd()")
+        self.assertFalse(blocked["ok"])
+        self.assertIn("Disallowed syntax", blocked["stderr"])
+
+    def test_router_classifies_new_mcp_categories(self) -> None:
+        router = MCPRouter()
+        cases = {
+            "show docker containers": "docker", "show git status": "git",
+            "list GitHub pull requests": "github", "browse https://example.com": "browser",
+            "run command rg": "terminal",
+        }
+        for request, category in cases.items():
+            with self.subTest(request=request): self.assertEqual(router.classify(request).category, category)
+
+    def test_browser_blocks_private_networks(self) -> None:
+        for url in ("http://localhost/admin", "http://127.0.0.1/", "http://[::1]/"):
+            with self.subTest(url=url), self.assertRaises(ValueError): validate_public_url(url)
+
+    def test_terminal_rejects_unlisted_commands(self) -> None:
+        with self.assertRaises(PermissionError): run_terminal("powershell", ["-Command", "Get-ChildItem"])
+
+    def test_git_inspector_is_read_only_and_operational(self) -> None:
+        result = GitInspector(Path(__file__).resolve().parents[1]).status()
+        self.assertTrue(result["ok"])
+        self.assertIn("##", result["stdout"])
+
+    def test_github_and_docker_names_are_validated(self) -> None:
+        with self.assertRaises(ValueError): GitHubReader().repository("bad/name", "repo")
+        with self.assertRaises(ValueError): _safe_name("--dangerous-option")
+
+    def test_router_classifies_database_and_kubernetes_requests(self) -> None:
+        router = MCPRouter()
+        cases = {"show Kubernetes pods": "kubernetes", "query PostgreSQL": "postgresql", "inspect SQLite": "sqlite", "list Redis keys": "redis"}
+        for request, category in cases.items():
+            with self.subTest(request=request): self.assertEqual(router.classify(request).category, category)
+
+    def test_router_classifies_checkpoint_ten_integrations(self) -> None:
+        router = MCPRouter()
+        cases = {
+            "list AWS cloud resources": "cloud",
+            "search Notion workspace": "productivity",
+            "call REST API endpoint": "rest",
+            "OCR this scanned PDF": "ocr",
+            "resize this image": "image",
+            "use a custom MCP server": "custom",
+        }
+        for request, category in cases.items():
+            with self.subTest(request=request): self.assertEqual(router.classify(request).category, category)
+
+    def test_cloud_and_productivity_inputs_are_validated(self) -> None:
+        with self.assertRaises(ValueError): CloudReader().inspect("unknown")
+        reader = ProductivityReader(slack_token="token", notion_token="token")
+        with self.assertRaises(ValueError): reader.slack_history("bad channel!")
+        with self.assertRaises(ValueError): reader.notion_page("not-a-page-id")
+
+    def test_rest_mcp_blocks_mutations_and_private_networks(self) -> None:
+        with mock.patch.dict(os.environ, {"AIOS_MCP_REST_WRITE": "false"}):
+            with self.assertRaises(PermissionError): validate_rest_request("POST", "https://example.com")
+        with self.assertRaises(ValueError): validate_rest_request("GET", "http://127.0.0.1/private")
+
+    def test_image_processing_is_workspace_confined_and_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            Image.new("RGB", (20, 10), "red").save(root / "source.png")
+            self.assertEqual(ImageProcessor(root).info("source.png")["width"], 20)
+            with self.assertRaises(PermissionError): ImageProcessor(root, allow_write=False).transform("source.png", "out.png", width=10)
+            result = ImageProcessor(root, allow_write=True).transform("source.png", "out.webp", width=10)
+            self.assertEqual((result["width"], result["height"]), (10, 5))
+            with self.assertRaises(ValueError): ImageProcessor(root).info("../outside.png")
+
+    def test_ocr_validates_workspace_paths_and_types(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "notes.txt").write_text("not an image", encoding="utf-8")
+            reader = OCRReader(root)
+            with self.assertRaises(ValueError): reader.extract("notes.txt")
+            with self.assertRaises(ValueError): reader.extract("../outside.png")
+
+    def test_custom_mcp_config_is_validated_and_execution_is_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            config = Path(temp_dir) / "servers.json"
+            config.write_text('{"mcpServers":{"demo":{"command":"python","args":["-m","demo"],"cwd":"' + str(Path(temp_dir)).replace('\\', '\\\\') + '"}}}', encoding="utf-8")
+            registry = CustomMCPRegistry(config, enabled=False)
+            self.assertEqual(registry.list_servers()[0]["name"], "demo")
+            with self.assertRaises(PermissionError): registry._parameters("demo")
+
+    def test_sql_validator_blocks_mutations_and_multiple_statements(self) -> None:
+        self.assertEqual(validate_read_only_sql("SELECT 1;"), "SELECT 1")
+        for query in ("DELETE FROM users", "SELECT 1; DROP TABLE users"):
+            with self.subTest(query=query), self.assertRaises((PermissionError, ValueError)): validate_read_only_sql(query)
+
+    def test_sqlite_reader_opens_database_read_only(self) -> None:
+        import sqlite3
+        from contextlib import closing
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            path = Path(temp_dir) / "test.db"
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("CREATE TABLE notes (id INTEGER, text TEXT)")
+                connection.execute("INSERT INTO notes VALUES (1, 'hello')")
+                connection.commit()
+            reader = SQLiteReader(path)
+            self.assertEqual(reader.query("SELECT * FROM notes")["rows"][0]["text"], "hello")
+            with self.assertRaises(PermissionError): reader.query("UPDATE notes SET text = 'bad'")
+
+    def test_kubernetes_identifiers_reject_options(self) -> None:
+        self.assertEqual(safe_kubernetes_name("default", "namespace"), "default")
+        with self.assertRaises(ValueError): safe_kubernetes_name("--all-namespaces", "namespace")
 
 
 class StreamingChunkingTests(unittest.TestCase):

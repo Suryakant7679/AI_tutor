@@ -131,6 +131,94 @@ stores document, memory, code, and conversation points in one collection with
 filterable `source_type` payloads. Uploaded bytes remain under `data/uploads`
 and artifact metadata remains in `data/uploads.json`.
 
+## MCP router and local servers
+
+Install dependencies, then run any server over standard MCP stdio:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m app.mcp.router_server
+python -m app.mcp.filesystem_server
+python -m app.mcp.python_server
+python -m app.mcp.terminal_server
+python -m app.mcp.browser_server
+python -m app.mcp.git_server
+python -m app.mcp.github_server
+python -m app.mcp.docker_server
+python -m app.mcp.kubernetes_server
+python -m app.mcp.postgresql_server
+python -m app.mcp.sqlite_server
+python -m app.mcp.redis_server
+python -m app.mcp.cloud_server
+python -m app.mcp.productivity_server
+python -m app.mcp.rest_server
+python -m app.mcp.ocr_server
+python -m app.mcp.image_server
+python -m app.mcp.custom_server
+```
+
+MCP clients should launch these commands themselves rather than starting them
+manually. Copy `mcp-servers.example.json` into your client's MCP configuration
+and replace its `cwd` placeholders with this repository's absolute path.
+Filesystem access is restricted to `AIOS_MCP_WORKSPACE_ROOT` (the repository by
+default), and `.env`/`.git` are denied. Writes remain disabled unless
+`AIOS_MCP_FILESYSTEM_WRITE=true`. Python execution is isolated, timed out, and
+rejects imports, file access, private attributes, and dynamic evaluation.
+Terminal execution is shell-free and limited to an allowlist. Browser requests
+block private and local network addresses. Git, GitHub, and Docker servers are
+read-only: they expose repository status/history, public or token-authenticated
+GitHub metadata, and container/image/log inspection without mutation tools.
+Kubernetes is limited to contexts, resource inspection, descriptions, and logs.
+PostgreSQL connections force read-only transactions, SQLite opens in read-only
+mode inside the workspace, and Redis access is confined to the `aios:` prefix.
+Cloud inventory uses installed and authenticated `aws`, `az`, or `gcloud` CLIs
+and only exposes identity, resource, and storage listing commands. Slack and
+Notion use `SLACK_BOT_TOKEN` and `NOTION_TOKEN` for read-only queries. REST URLs
+use the browser server's public-network checks; optionally restrict them further
+with `AIOS_MCP_REST_HOSTS`, and opt into mutations with
+`AIOS_MCP_REST_WRITE=true`. OCR uses Tesseract when available or command
+templates in `AIOS_OCR_COMMAND`/`AIOS_PDF_OCR_COMMAND` (`{file}` and
+`{language}` placeholders are supported). Image output is disabled unless
+`AIOS_MCP_IMAGE_WRITE=true`.
+
+Custom stdio servers are read from `AIOS_MCP_CUSTOM_CONFIG` (default
+`mcp-servers.json`). Listing configured servers is safe by default; spawning or
+calling them requires `AIOS_MCP_CUSTOM_ENABLED=true`, and the executable must be
+listed by `AIOS_MCP_CUSTOM_COMMANDS`. Config files and server working directories
+must remain inside the workspace.
+
+## Planner and specialist agents
+
+`POST /api/orchestrate` runs task planning, capability checks, dependency
+ordering, decision routing, and specialist-agent dispatch. The implemented
+specialists cover memory, local RAG, public web browsing, coding inspection and
+changes, allowlisted terminal commands, workspace-confined filesystem
+operations, vision/OCR, read-only databases, explicit registered-tool calls,
+and post-execution reflection. Structured operation details can be supplied under
+`context.agent_input`, or per agent under `context.agent_inputs`:
+
+```json
+{
+  "objective": "Search the workspace for TODO comments",
+  "context": {
+    "agent": "filesystem",
+    "agent_input": {"operation": "search", "query": "TODO", "path": "."}
+  }
+}
+```
+
+Filesystem and coding writes still require `AIOS_MCP_FILESYSTEM_WRITE=true`.
+Terminal commands remain limited by `AIOS_MCP_TERMINAL_COMMANDS`, and browser
+requests retain public-network validation. Database agents preserve the existing
+read-only SQL and Redis namespace restrictions. Every executed specialist result
+is passed through the reflection agent for a verdict and success-criteria review.
+An independent reviewer then applies the final quality gate. Failed specialist
+executions are retried once by default and can be configured per request with
+`context.max_retries` from 0 to 3. Use a list under
+`context.agent_inputs.<agent>` to provide different structured input for each
+attempt. The final response merges every attempt, reflection, reviewer verdict,
+plan ID, retry count, and status into `final_result`.
+
 Import existing local sessions and conversations once before starting the app:
 
 ```powershell

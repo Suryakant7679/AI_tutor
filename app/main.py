@@ -30,6 +30,9 @@ try:
     from app.redis_state import create_redis_state
     from app.store import utc_now
     from app.vector_store import create_vector_store
+    from app.agents.planner import PlannerAgent
+    from app.agents.orchestrator import LangGraphOrchestrator
+    from app.agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
 except ModuleNotFoundError:
     from config import configured_api_keys, load_env
     from llm import LLMError, USAGE, current_route, generate_response, generate_response_stream
@@ -37,6 +40,9 @@ except ModuleNotFoundError:
     from redis_state import create_redis_state
     from store import utc_now
     from vector_store import create_vector_store
+    from agents.planner import PlannerAgent
+    from agents.orchestrator import LangGraphOrchestrator
+    from agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
 
 
 load_env()
@@ -54,6 +60,12 @@ RAG_TOP_K = int(os.getenv("AIOS_RAG_TOP_K", "5"))
 VECTOR_STORE = create_vector_store(VECTOR_INDEX, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS)
 CHAT_RATE_LIMIT = int(os.getenv("AIOS_CHAT_RATE_LIMIT", "30"))
 CHAT_RATE_WINDOW = int(os.getenv("AIOS_CHAT_RATE_WINDOW", "60"))
+PLANNER = PlannerAgent()
+SPECIALIST_AGENTS = SpecialistAgentRegistry(
+    memory=MemoryAgent(STORE),
+    rag=RAGAgent(lambda query, top_k, source_types: hybrid_retrieve(query, top_k, source_types)),
+)
+ORCHESTRATOR = LangGraphOrchestrator(planner=PLANNER, agents=SPECIALIST_AGENTS)
 
 
 class AIOSHandler(BaseHTTPRequestHandler):
@@ -166,6 +178,24 @@ class AIOSHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/plan":
+            try:
+                body = self.read_json()
+                objective = str(body.get("objective") or "").strip()
+                context = optional_dict(body, "context") or {}
+                self.send_json({"plan": PLANNER.plan_dict(objective, context)}, status=201)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+            return
+        if path == "/api/orchestrate":
+            try:
+                body = self.read_json()
+                objective = str(body.get("objective") or "").strip()
+                context = optional_dict(body, "context") or {}
+                self.send_json({"orchestration": ORCHESTRATOR.invoke(objective, context)}, status=201)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+            return
         if path == "/api/conversations":
             try:
                 body = self.read_json()

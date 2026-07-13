@@ -1,3 +1,10 @@
 psycopg[binary]>=3.2,<4
 redis>=5,<8
 qdrant-client>=1.14,<2
+mcp>=1.27,<2
+Pillow>=10,<13
+langgraph>=1.0.9,<1.1
+langsmith>=0.4,<0.5
+websockets>=14,<15
+# Keep compatibility with the FastAPI installation used by other local projects.
+starlette>=0.40,<0.47

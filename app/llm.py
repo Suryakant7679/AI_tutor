@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from app.model_router import EnvironmentModelRouter, ModelRoute
 from app.usage import UsageTracker
+from app.validation import ValidationError, ValidationManager, validation_context
 
 
 SYSTEM_PROMPT = (
@@ -25,28 +26,52 @@ class LLMError(RuntimeError):
 
 ROUTER = EnvironmentModelRouter()
 USAGE = UsageTracker()
+VALIDATION = ValidationManager.from_env()
 _ROUTE_STATE = local()
 
 
 def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
-    text, route = generate_with_router(messages, stream=False)
-    assert isinstance(text, str)
-    USAGE.record(route.provider, route.model, route.task, messages, text)
-    return text, route.provider
+    text, route = _generate_response_once(messages)
+    active_route = [route]
+
+    def retry(feedback: str) -> str:
+        retry_messages = [*messages, {"role": "system", "content": feedback}]
+        corrected, retry_route = _generate_response_once(retry_messages)
+        active_route[0] = retry_route
+        return corrected
+
+    try:
+        validated = VALIDATION.process(text, validation_context(messages), retry=retry)
+    except ValidationError as exc:
+        raise LLMError(str(exc)) from exc
+    return validated, active_route[0].provider
 
 
 def generate_response_stream(messages: list[dict[str, str]]) -> tuple[Iterator[str], str]:
     chunks, route = generate_with_router(messages, stream=True)
     assert not isinstance(chunks, str)
+    output = "".join(chunks).strip()
+    USAGE.record(route.provider, route.model, route.task, messages, output)
+    active_route = [route]
 
-    def tracked() -> Iterator[str]:
-        output: list[str] = []
-        for chunk in chunks:
-            output.append(chunk)
-            yield chunk
-        USAGE.record(route.provider, route.model, route.task, messages, "".join(output))
+    def retry(feedback: str) -> str:
+        retry_messages = [*messages, {"role": "system", "content": feedback}]
+        corrected, retry_route = _generate_response_once(retry_messages)
+        active_route[0] = retry_route
+        return corrected
 
-    return tracked(), route.provider
+    try:
+        validated = VALIDATION.process(output, validation_context(messages), retry=retry)
+    except ValidationError as exc:
+        raise LLMError(str(exc)) from exc
+    return iter((validated,)), active_route[0].provider
+
+
+def _generate_response_once(messages: list[dict[str, str]]) -> tuple[str, ModelRoute]:
+    text, route = generate_with_router(messages, stream=False)
+    assert isinstance(text, str)
+    USAGE.record(route.provider, route.model, route.task, messages, text)
+    return text, route
 
 
 def generate_with_router(
