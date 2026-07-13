@@ -40,11 +40,17 @@ class QdrantVectorStore:
     def _ensure_collection(self) -> None:
         from qdrant_client import models
         if not self.client.collection_exists(self.collection):
-            self.client.create_collection(
-                collection_name=self.collection,
-                vectors_config=models.VectorParams(size=self.dimensions, distance=models.Distance.COSINE),
-                on_disk_payload=True,
-            )
+            try:
+                self.client.create_collection(
+                    collection_name=self.collection,
+                    vectors_config=models.VectorParams(size=self.dimensions, distance=models.Distance.COSINE),
+                    on_disk_payload=True,
+                )
+            except Exception:
+                # Multiple app/worker processes may race to create the collection.
+                # Suppress only the case where another process created it first.
+                if not self.client.collection_exists(self.collection):
+                    raise
         for field in ("source_type", "artifact_id", "source_id"):
             try:
                 self.client.create_payload_index(self.collection, field, models.PayloadSchemaType.KEYWORD)

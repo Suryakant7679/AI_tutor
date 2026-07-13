@@ -14,7 +14,7 @@ from app.migrate import migration_files
 from app.postgres_store import PostgreSQLConversationStore
 from app.storage import create_store
 from app.redis_state import RedisState
-from app.vector_store import JsonVectorStore
+from app.vector_store import JsonVectorStore, QdrantVectorStore
 from app.mcp.filesystem_tools import WorkspaceFilesystem
 from app.mcp.python_tools import run_restricted_python
 from app.mcp.router import MCPRouter
@@ -331,6 +331,28 @@ class VectorStoreTests(unittest.TestCase):
             store.replace_source("memory", [{"id": "m2", "source_type": "memory", "embedding": [0.5] * 8}])
             self.assertEqual({item["id"] for item in store.load()}, {"d1", "m2"})
 
+
+    def test_qdrant_collection_creation_tolerates_concurrent_creator(self) -> None:
+        class RacingClient:
+            def __init__(self):
+                self.exists_checks = 0
+
+            def collection_exists(self, collection):
+                self.exists_checks += 1
+                return self.exists_checks > 1
+
+            def create_collection(self, **kwargs):
+                raise RuntimeError("collection already exists")
+
+            def create_payload_index(self, *args, **kwargs):
+                return None
+
+        store = QdrantVectorStore.__new__(QdrantVectorStore)
+        store.client = RacingClient()
+        store.collection = "test"
+        store.dimensions = 8
+        store._ensure_collection()
+        self.assertEqual(store.client.exists_checks, 2)
 
 class PlannerAgentTests(unittest.TestCase):
     def test_classifier_identifies_category_intent_and_tool_requirement(self) -> None:
