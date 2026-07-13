@@ -205,6 +205,38 @@ class GatewayHTTPIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(error["error"]["code"], "forbidden")
 
+    def test_semantic_chat_search_is_scoped_to_authenticated_user(self) -> None:
+        first = self.register("search-one@example.com")
+        second = self.register("search-two@example.com")
+        _, _, first_chat = self.request("POST", "/api/v1/conversations", {}, first["access_token"])
+        self.request("POST", "/api/v1/conversations", {}, second["access_token"])
+        expected = [{
+            "conversation_id": first_chat["id"],
+            "title": "Vector memory",
+            "snippet": "We discussed semantic retrieval.",
+            "score": 0.9,
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }]
+        with (
+            mock.patch.object(self.main, "index_conversation_history") as index_history,
+            mock.patch.object(self.main, "related_conversations", return_value=expected) as search,
+        ):
+            status, _, payload = self.request(
+                "GET",
+                "/api/v1/conversations/search?q=meaning+based+memory&top_k=3",
+                token=first["access_token"],
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["results"], expected)
+        indexed = index_history.call_args.args[0]
+        self.assertEqual([item["id"] for item in indexed], [first_chat["id"]])
+        search.assert_called_once_with(
+            "meaning based memory",
+            indexed,
+            top_k=3,
+            user_id=first["user"]["id"],
+        )
     def test_long_term_memory_is_scoped_to_authenticated_user(self) -> None:
         first = self.register("memory-one@example.com")
         second = self.register("memory-two@example.com")

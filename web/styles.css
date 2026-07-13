@@ -477,16 +477,6 @@ textarea::placeholder {
   background: var(--line);
 }
 
-.quick-actions {
-  max-width: 770px;
-  margin: 22px auto 0;
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.quick-actions button,
 button.ghost {
   min-height: 38px;
   border-radius: 999px;
@@ -496,6 +486,115 @@ button.ghost {
   padding: 8px 16px;
 }
 
+.chat-search-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 48px));
+  margin: auto;
+  padding: 20px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.chat-search-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.search-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.search-dialog-heading h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.search-dialog-heading p,
+.chat-search-status {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.chat-search-form input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 11px 13px;
+}
+
+.chat-search-form input:focus {
+  border-color: var(--muted);
+}
+
+.chat-search-form button {
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  padding: 0 18px;
+}
+
+.chat-search-results {
+  max-height: min(480px, calc(100vh - 250px));
+  margin-top: 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-search-result {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+}
+
+.chat-search-result:hover,
+.chat-search-result:focus-visible {
+  outline: 0;
+  background: var(--panel-2);
+}
+
+.chat-search-result strong,
+.chat-search-result span,
+.chat-search-result small {
+  display: block;
+}
+
+.chat-search-result span {
+  overflow: hidden;
+  color: var(--muted);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-search-result small {
+  color: var(--soft);
+}
 .tool-panel {
   position: fixed;
   top: 0;
@@ -665,9 +764,5 @@ body.tools-open .tool-panel {
   .composer-actions {
     grid-column: 1 / -1;
     justify-content: flex-end;
-  }
-
-  .quick-actions {
-    display: none;
   }
 }

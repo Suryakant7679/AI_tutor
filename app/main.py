@@ -250,6 +250,20 @@ class AIOSHandler(BaseHTTPRequestHandler):
             index_long_term_memory(STORE.get_long_term_memory(self.user_id), self.user_id)
             self.send_json({"query": text_query, "results": semantic_search(text_query, top_k, source_types or None, self.user_id)})
             return
+        if path == "/api/conversations/search":
+            query_params = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
+            text_query = str(query_params.get("q") or "").strip()[:500]
+            try:
+                top_k = max(1, min(int(query_params.get("top_k", 10)), 25))
+            except (TypeError, ValueError):
+                top_k = 10
+            conversations = STORE.list_conversations_for_user(self.user_id) if self.user_id else STORE.list_conversations()
+            index_conversation_history(conversations)
+            self.send_json({
+                "query": text_query,
+                "results": related_conversations(text_query, conversations, top_k=top_k, user_id=self.user_id),
+            })
+            return
         if path == "/api/conversations":
             session_id = self.session_id_from_request(parsed_url.query)
             conversations = (
@@ -274,12 +288,12 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 return
             query_params = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
             query = str(query_params.get("q") or conversation_search_text(conversation)).strip()
-            conversations = STORE.list_conversations()
+            conversations = STORE.list_conversations_for_user(self.user_id) if self.user_id else STORE.list_conversations()
             index_conversation_history(conversations)
             self.send_json({
                 "conversation_id": conversation_id,
                 "query": query,
-                "related": related_conversations(query, conversations, exclude_id=conversation_id),
+                "related": related_conversations(query, conversations, exclude_id=conversation_id, user_id=self.user_id),
             })
             return
         if path.startswith("/api/conversations/"):
@@ -1670,11 +1684,12 @@ def related_conversations(
     conversations: list[dict[str, Any]],
     exclude_id: str | None = None,
     top_k: int = 5,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if not query.strip():
         return []
     lookup = {str(item.get("id")): item for item in conversations}
-    message_results = semantic_search(query, top_k=max(top_k * 8, 20), source_types=["conversation"])
+    message_results = semantic_search(query, top_k=max(top_k * 8, 20), source_types=["conversation"], user_id=user_id)
     grouped: dict[str, dict[str, Any]] = {}
     for result in message_results:
         conversation_id = str(result.get("conversation_id") or result.get("source_id") or "")

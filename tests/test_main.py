@@ -1268,6 +1268,18 @@ class UploadParsingTests(unittest.TestCase):
         self.assertEqual(results[0]["conversation_id"], "related")
         self.assertNotIn("current", [item["conversation_id"] for item in results])
 
+    def test_related_conversation_search_passes_user_scope_to_retrieval(self) -> None:
+        from app import main as main_module
+        with mock.patch.object(main_module, "semantic_search", return_value=[]) as search:
+            results = related_conversations("database design", [], user_id="user-1")
+
+        self.assertEqual(results, [])
+        search.assert_called_once_with(
+            "database design",
+            top_k=40,
+            source_types=["conversation"],
+            user_id="user-1",
+        )
     def test_similar_documents_rank_related_chunk_embeddings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             from app import main as main_module

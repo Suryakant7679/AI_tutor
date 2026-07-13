@@ -16,6 +16,13 @@ const form = document.querySelector("#chat-form");
 const input = document.querySelector("#message-input");
 const conversationList = document.querySelector("#conversation-list");
 const newChat = document.querySelector("#new-chat");
+const searchChatsButton = document.querySelector("#search-chats");
+const chatSearchDialog = document.querySelector("#chat-search-dialog");
+const chatSearchForm = document.querySelector("#chat-search-form");
+const chatSearchQuery = document.querySelector("#chat-search-query");
+const chatSearchStatus = document.querySelector("#chat-search-status");
+const chatSearchResults = document.querySelector("#chat-search-results");
+const closeChatSearch = document.querySelector("#close-chat-search");
 const voiceInputButton = document.querySelector("#voice-input");
 const voiceOutputButton = document.querySelector("#voice-output");
 const sendMessageButton = document.querySelector("#send-message");
@@ -47,7 +54,6 @@ const notificationList = document.querySelector("#notification-list");
 const mobileTools = document.querySelector("#mobile-tools");
 const toolsToggle = document.querySelector("#tools-toggle");
 const closeTools = document.querySelector("#close-tools");
-const sidebarToggle = document.querySelector("#sidebar-toggle");
 const emptyState = document.querySelector("#empty-state");
 
 function applyTheme(theme) {
@@ -107,7 +113,6 @@ threadSelect.addEventListener("change", () => {
 mobileTools.addEventListener("click", () => document.body.classList.toggle("tools-open"));
 toolsToggle.addEventListener("click", () => document.body.classList.toggle("tools-open"));
 closeTools.addEventListener("click", () => document.body.classList.remove("tools-open"));
-sidebarToggle.addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
 
 input.addEventListener("input", () => {
   input.style.height = "auto";
@@ -250,6 +255,83 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+function openChatSearch() {
+  chatSearchDialog.showModal();
+  chatSearchQuery.focus();
+  chatSearchQuery.select();
+}
+
+function closeChatSearchDialog() {
+  chatSearchDialog.close();
+}
+
+function renderChatSearchResults(results) {
+  chatSearchResults.innerHTML = "";
+  if (!results.length) {
+    chatSearchStatus.textContent = "No semantically related chats were found.";
+    return;
+  }
+
+  chatSearchStatus.textContent = results.length + " related chat" + (results.length === 1 ? "" : "s") + " found.";
+  results.forEach((result) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-search-result";
+
+    const title = document.createElement("strong");
+    title.textContent = result.title || "New chat";
+    const snippet = document.createElement("span");
+    snippet.textContent = result.snippet || "Matching conversation";
+    const metadata = document.createElement("small");
+    const updated = result.updated_at ? new Date(result.updated_at) : null;
+    metadata.textContent = updated && !Number.isNaN(updated.getTime())
+      ? "Semantic match · " + updated.toLocaleString()
+      : "Semantic match";
+
+    button.append(title, snippet, metadata);
+    button.addEventListener("click", async () => {
+      try {
+        await openConversation(result.conversation_id);
+        closeChatSearchDialog();
+        document.body.classList.remove("sidebar-open");
+      } catch (error) {
+        chatSearchStatus.textContent = shortError(error);
+      }
+    });
+    chatSearchResults.appendChild(button);
+  });
+}
+
+async function searchPreviousChats(query) {
+  const text = query.trim();
+  if (!text) {
+    chatSearchStatus.textContent = "Enter a phrase or describe the conversation you want to retrieve.";
+    chatSearchResults.innerHTML = "";
+    return;
+  }
+
+  chatSearchStatus.textContent = "Searching previous chats by meaning…";
+  chatSearchResults.innerHTML = "";
+  try {
+    const url = "/api/v1/conversations/search?q=" + encodeURIComponent(text) + "&top_k=10";
+    const response = await authenticatedFetch(url);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(shortError(payload.error || "Chat search failed."));
+    renderChatSearchResults(payload.results || []);
+  } catch (error) {
+    chatSearchStatus.textContent = "Search error: " + shortError(error);
+  }
+}
+
+searchChatsButton.addEventListener("click", openChatSearch);
+closeChatSearch.addEventListener("click", closeChatSearchDialog);
+chatSearchDialog.addEventListener("click", (event) => {
+  if (event.target === chatSearchDialog) closeChatSearchDialog();
+});
+chatSearchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  searchPreviousChats(chatSearchQuery.value);
+});
 newChat.addEventListener("click", async () => {
   setActiveConversation(null);
   setActiveThread("main");
