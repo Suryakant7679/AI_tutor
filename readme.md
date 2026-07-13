@@ -178,6 +178,21 @@ Streaming chat responses use newline-delimited JSON events:
 {"type":"done","message":{"role":"assistant","content":"Hello"}}
 ```
 
+## Deployment
+
+A production Compose stack is included for PostgreSQL, Redis, Qdrant, API/UI,
+workers, scheduler, monitoring, Nginx HTTPS, and optional Cloudflare Tunnel.
+Start by copying `.env.production.example` to the Git-ignored
+`.env.production`, generating or installing TLS certificates, then run:
+
+```powershell
+$env:AIOS_ENV_FILE=".env.production"
+docker compose --env-file .env.production up -d --build
+```
+
+Use `scripts/backup.ps1` and `scripts/restore.ps1` for PostgreSQL plus
+application-data disaster recovery. See `SETUP.md` for certificate, tunnel,
+security, validation, and recovery details.
 ## Testing
 
 Run the Python test suite:

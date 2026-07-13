@@ -218,6 +218,105 @@ stores document, memory, code, and conversation points in one collection with
 filterable `source_type` payloads. Uploaded bytes remain under `data/uploads`
 and artifact metadata remains in `data/uploads.json`.
 
+## Production deployment
+
+Checkpoint 16 provides a non-root Python 3.12 image and a Compose stack for the
+API/frontend, PostgreSQL migrations, Redis, Qdrant, workers, scheduler,
+monitoring, Nginx, and an optional Cloudflare Tunnel.
+
+### 1. Create production configuration
+
+```powershell
+Copy-Item .env.production.example .env.production
+```
+
+Replace every `CHANGE_ME` value. Generate the JWT secret with:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Use a different strong PostgreSQL password and URL-encode it in `DATABASE_URL`
+if it contains reserved URL characters. Add at least one model-provider key and
+set `AIOS_ADMIN_EMAILS` to the administrator account. `.env.production` is
+Git-ignored and must never be committed.
+
+### 2. Configure HTTPS certificates
+
+For local validation, generate an ignored self-signed certificate:
+
+```powershell
+.\scripts\generate-dev-cert.ps1 -Domain localhost
+```
+
+For production, replace `deploy/certs/fullchain.pem` and
+`deploy/certs/privkey.pem` with certificates issued for the deployment domain.
+Protect `privkey.pem` and renew certificates before expiration. Nginx redirects
+HTTP to HTTPS, permits TLS 1.2/1.3, adds security headers, and disables buffering
+for streaming API responses.
+
+### 3. Validate and start the stack
+
+```powershell
+$env:AIOS_ENV_FILE=".env.production"
+docker compose --env-file .env.production config
+docker compose --env-file .env.production up -d --build
+```
+
+Migrations must complete successfully before the app starts. PostgreSQL, Redis,
+and Qdrant use persistent named volumes; only Nginx publishes host ports. Check
+status and logs with:
+
+```powershell
+docker compose --env-file .env.production ps
+docker compose --env-file .env.production logs --tail 100 app worker scheduler monitoring nginx
+docker compose --env-file .env.production exec app python -m app.index_workspace_code
+```
+
+Open `https://localhost` for a development certificate, or the configured
+production domain. Stop without deleting data using:
+
+```powershell
+docker compose --env-file .env.production down
+```
+
+Do not add `--volumes` unless permanent PostgreSQL, Redis, Qdrant, and
+application data should be destroyed.
+
+### 4. Optional Cloudflare Tunnel
+
+Create a remotely managed tunnel in Cloudflare Zero Trust, copy only its tunnel
+token into `TUNNEL_TOKEN`, and configure the public hostname origin as
+`https://nginx:443`. For the generated self-signed development certificate,
+enable the tunnel origin setting `noTLSVerify`; for production, use a valid
+origin certificate and verification. Start the opt-in profile with:
+
+```powershell
+docker compose --env-file .env.production --profile tunnel up -d cloudflared
+```
+
+Treat the tunnel token as a secret and rotate it if exposed.
+
+### 5. Backup and restore
+
+Create a consistent PostgreSQL dump and application-data archive:
+
+```powershell
+.\scripts\backup.ps1 -EnvFile .env.production -OutputDirectory deployment-backups
+```
+
+The output contains a `postgres-*.sql` dump and `data-*.zip` archive. Backups
+contain user data and signing secrets; encrypt them, restrict access, copy them
+off-host, and test restores regularly. Restore the newest matching pair from a
+backup directory only after confirming the destructive operation:
+
+```powershell
+.\scripts\restore.ps1 -EnvFile .env.production -BackupDirectory deployment-backups -Force
+```
+
+Restore stops the public/application services, restores PostgreSQL with
+`ON_ERROR_STOP`, validates ZIP members against path traversal, atomically
+replaces application data with rollback protection, and restarts the stack.
 ## MCP router and local servers
 
 Install dependencies, then run any server over standard MCP stdio:

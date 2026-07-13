@@ -279,10 +279,10 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 
 ## Checkpoint 16: Deployment
 
-- [ ] Docker container for frontend/backend
-- [ ] Docker Compose for PostgreSQL, Redis, Qdrant, workers, scheduler, and monitoring
-- [ ] Nginx reverse proxy
-- [ ] HTTPS setup
-- [ ] Cloudflare Tunnel
-- [ ] Production environment configuration
-- [ ] Backup and restore process
+- [x] Docker container for frontend/backend
+- [x] Docker Compose for PostgreSQL, Redis, Qdrant, workers, scheduler, and monitoring
+- [x] Nginx reverse proxy
+- [x] HTTPS setup
+- [ ] Cloudflare Tunnel (pending: add `TUNNEL_TOKEN` and activate the tunnel)
+- [x] Production environment configuration
+- [x] Backup and restore process
