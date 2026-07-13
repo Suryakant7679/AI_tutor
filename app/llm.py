@@ -4,9 +4,13 @@ import json
 import os
 import time
 from collections.abc import Iterator
+from threading import local
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from app.model_router import EnvironmentModelRouter, ModelRoute
+from app.usage import UsageTracker
 
 
 SYSTEM_PROMPT = (
@@ -19,30 +23,57 @@ class LLMError(RuntimeError):
     pass
 
 
-def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
-    requested = os.getenv("AIOS_PROVIDER", "auto").strip().lower()
-    if requested == "auto":
-        return generate_with_fallback(messages)
+ROUTER = EnvironmentModelRouter()
+USAGE = UsageTracker()
+_ROUTE_STATE = local()
 
-    provider = requested
-    if provider in {"openai", "groq", "deepseek"}:
-        return chat_completions(provider, messages), provider
-    if provider == "gemini":
-        return gemini(messages), provider
-    raise LLMError(f"Unknown AIOS_PROVIDER: {provider}")
+
+def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
+    text, route = generate_with_router(messages, stream=False)
+    assert isinstance(text, str)
+    USAGE.record(route.provider, route.model, route.task, messages, text)
+    return text, route.provider
 
 
 def generate_response_stream(messages: list[dict[str, str]]) -> tuple[Iterator[str], str]:
-    requested = os.getenv("AIOS_PROVIDER", "auto").strip().lower()
-    if requested == "auto":
-        return generate_stream_with_fallback(messages)
+    chunks, route = generate_with_router(messages, stream=True)
+    assert not isinstance(chunks, str)
 
-    provider = requested
-    if provider in {"openai", "groq", "deepseek"}:
-        return chat_completions_stream(provider, messages), provider
-    if provider == "gemini":
-        return gemini_stream(messages), provider
-    raise LLMError(f"Unknown AIOS_PROVIDER: {provider}")
+    def tracked() -> Iterator[str]:
+        output: list[str] = []
+        for chunk in chunks:
+            output.append(chunk)
+            yield chunk
+        USAGE.record(route.provider, route.model, route.task, messages, "".join(output))
+
+    return tracked(), route.provider
+
+
+def generate_with_router(
+    messages: list[dict[str, str]], stream: bool
+) -> tuple[str | Iterator[str], ModelRoute]:
+    try:
+        routes = ROUTER.routes(messages, configured_providers())
+    except ValueError as exc:
+        raise LLMError(str(exc)) from exc
+    errors: list[str] = []
+    for route in routes:
+        _ROUTE_STATE.active = route
+        try:
+            if route.provider in {"openai", "groq", "deepseek"}:
+                result = chat_completions_stream(route.provider, messages) if stream else chat_completions(route.provider, messages)
+            else:
+                result = gemini_stream(messages) if stream else gemini(messages)
+            return result, route
+        except LLMError as exc:
+            errors.append(f"{route.provider}: {exc}")
+    if errors:
+        raise LLMError("All configured providers failed. " + " | ".join(errors))
+    raise LLMError("No LLM provider is configured. Add an API key to .env.")
+
+
+def current_route() -> ModelRoute | None:
+    return getattr(_ROUTE_STATE, "active", None)
 
 
 def generate_with_fallback(messages: list[dict[str, str]]) -> tuple[str, str]:
@@ -380,6 +411,9 @@ def require_env(name: str) -> str:
 
 
 def provider_model(provider: str, default: str) -> str:
+    active_route = current_route()
+    if active_route and active_route.provider == provider:
+        return active_route.model
     specific_names = {
         "openai": "AIOS_OPENAI_MODEL",
         "groq": "AIOS_GROQ_MODEL",

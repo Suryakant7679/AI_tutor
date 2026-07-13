@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import hashlib
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -16,20 +17,33 @@ from uuid import uuid4
 from email.parser import BytesParser
 from email.policy import default
 
+
+# Support both `python app/main.py` and `python -m app.main` from the project root.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from app.config import configured_api_keys, load_env
-    from app.llm import LLMError, generate_response, generate_response_stream
-    from app.store import ConversationStore, utc_now
+    from app.llm import LLMError, USAGE, current_route, generate_response, generate_response_stream
+    from app.storage import create_store
+    from app.redis_state import create_redis_state
+    from app.store import utc_now
+    from app.vector_store import create_vector_store
 except ModuleNotFoundError:
     from config import configured_api_keys, load_env
-    from llm import LLMError, generate_response, generate_response_stream
-    from store import ConversationStore, utc_now
+    from llm import LLMError, USAGE, current_route, generate_response, generate_response_stream
+    from storage import create_store
+    from redis_state import create_redis_state
+    from store import utc_now
+    from vector_store import create_vector_store
 
 
 load_env()
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
-STORE = ConversationStore(os.getenv("AIOS_DATA_FILE", "data/conversations.json"))
+STORE = create_store()
+REDIS = create_redis_state()
 UPLOAD_ROOT = ROOT / os.getenv("AIOS_UPLOAD_DIR", "data/uploads")
 UPLOAD_INDEX = ROOT / os.getenv("AIOS_UPLOAD_INDEX", "data/uploads.json")
 VECTOR_INDEX = ROOT / os.getenv("AIOS_VECTOR_INDEX", "data/vectors.json")
@@ -37,6 +51,9 @@ MAX_UPLOAD_BYTES = int(os.getenv("AIOS_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
 EMBEDDING_DIMENSIONS = int(os.getenv("AIOS_EMBEDDING_DIMENSIONS", "64"))
 EMBEDDING_MODEL = os.getenv("AIOS_EMBEDDING_MODEL", "local-hash-v1")
 RAG_TOP_K = int(os.getenv("AIOS_RAG_TOP_K", "5"))
+VECTOR_STORE = create_vector_store(VECTOR_INDEX, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS)
+CHAT_RATE_LIMIT = int(os.getenv("AIOS_CHAT_RATE_LIMIT", "30"))
+CHAT_RATE_WINDOW = int(os.getenv("AIOS_CHAT_RATE_WINDOW", "60"))
 
 
 class AIOSHandler(BaseHTTPRequestHandler):
@@ -51,15 +68,37 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "service": "aios-starter",
                     "configured_api_keys": configured_api_keys(),
+                    "redis": "connected" if REDIS.ping() else "unavailable",
                 }
             )
             return
         if path == "/api/session":
             requested_session_id = self.session_id_from_request(parsed_url.query)
-            self.send_json({"session": STORE.get_or_create_session(requested_session_id)})
+            session = active_session(requested_session_id)
+            REDIS.set_active_session(session["id"], session)
+            self.send_json({"session": session})
+            return
+        if path.startswith("/api/streams/"):
+            conversation_id = path.rsplit("/", 1)[-1]
+            self.send_json({
+                "conversation_id": conversation_id,
+                "state": REDIS.get_stream_state(conversation_id),
+                "content": REDIS.get_stream_text(conversation_id),
+            })
             return
         if path == "/api/memory":
             self.send_json({"memory": STORE.get_long_term_memory()})
+            return
+        if path == "/api/memory/temporary":
+            query = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
+            conversation_id = str(query.get("conversation_id") or "").strip()
+            if not conversation_id:
+                self.send_json({"error": "conversation_id is required"}, status=400)
+                return
+            self.send_json({"conversation_id": conversation_id, "memory": REDIS.get_temporary_memory(conversation_id)})
+            return
+        if path == "/api/usage":
+            self.send_json({"usage": USAGE.summary()})
             return
         if path == "/api/search":
             query = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
@@ -133,7 +172,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
             except ValueError:
                 body = {}
             session_id = str(body.get("session_id") or "").strip() or self.session_id_from_request()
-            session = STORE.get_or_create_session(session_id or None)
+            session = active_session(session_id or None)
             conversation = STORE.create_conversation(session_id=session["id"])
             self.send_json(conversation, status=201)
             return
@@ -156,7 +195,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(exc)}, status=400)
                 return
             session_id = str(body.get("session_id") or "").strip() or self.session_id_from_request()
-            session = STORE.get_or_create_session(session_id or None)
+            session = active_session(session_id or None)
             session = STORE.update_session_context(
                 session["id"],
                 active_project=optional_text(body, "active_project"),
@@ -172,6 +211,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 user_preferences=optional_dict(body, "user_preferences"),
             )
             index_long_term_memory(STORE.get_long_term_memory())
+            REDIS.set_active_session(session["id"], session)
             self.send_json({"session": session})
             return
         if path == "/api/memory":
@@ -199,6 +239,19 @@ class AIOSHandler(BaseHTTPRequestHandler):
             self.send_json({"artifacts": artifacts}, status=201)
             return
         if path == "/api/chat":
+            rate_identity = self.session_id_from_request() or self.client_address[0]
+            rate = REDIS.rate_limit(rate_identity, CHAT_RATE_LIMIT, CHAT_RATE_WINDOW, "chat")
+            if not rate["allowed"]:
+                self.send_json(
+                    {"error": "Chat rate limit exceeded", "retry_after": rate["retry_after"]},
+                    status=429,
+                    headers={
+                        "Retry-After": str(rate["retry_after"]),
+                        "X-RateLimit-Limit": str(rate["limit"]),
+                        "X-RateLimit-Remaining": str(rate["remaining"]),
+                    },
+                )
+                return
             try:
                 body = self.read_json()
             except ValueError as exc:
@@ -214,7 +267,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
             if not message:
                 self.send_error(400, "Message is required")
                 return
-            session = STORE.get_or_create_session(session_id or None)
+            session = active_session(session_id or None)
             if not conversation_id:
                 conversation_id = STORE.create_conversation(session_id=session["id"])["id"]
             try:
@@ -235,6 +288,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                         "mcp": session.get("mcp_outputs", ""),
                     },
                 )
+                REDIS.set_temporary_memory(conversation_id, memory)
                 conversation = STORE.get_conversation(conversation_id)
                 thread_id = thread_id or conversation.get("active_thread_id") or "main"
                 context_window_tokens = session["user_preferences"]["context_window_tokens"]
@@ -264,9 +318,11 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     )
                     return
                 assistant_text, provider = generate_response(llm_messages)
+                route = current_route()
                 assistant_message = STORE.add_message(conversation_id, "assistant", assistant_text, thread_id=thread_id)
                 upsert_vector_records([vector_record_for_message(conversation_id, assistant_message)])
-                STORE.update_short_term_memory(conversation_id)
+                memory = STORE.update_short_term_memory(conversation_id)
+                REDIS.set_temporary_memory(conversation_id, memory)
                 STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
                 self.send_json(
                     {
@@ -276,6 +332,8 @@ class AIOSHandler(BaseHTTPRequestHandler):
                         "context_token_count": context_token_count,
                         "context_window_tokens": context_window_tokens,
                         "provider": provider,
+                        "task": route.task if route else "general",
+                        "model": route.model if route else "",
                         "message": {"role": "assistant", "content": assistant_text},
                     }
                 )
@@ -346,6 +404,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
         context_window_tokens: int,
     ) -> None:
         assistant_parts: list[str] = []
+        REDIS.set_stream_state(conversation_id, {"status": "running", "session_id": session_id, "thread_id": thread_id})
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -379,6 +438,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 }
             )
             chunks, provider = generate_response_stream(llm_messages)
+            route = current_route()
             self.write_ndjson_event(
                 {
                     "type": "meta",
@@ -388,6 +448,8 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     "context_token_count": context_token_count,
                     "context_window_tokens": context_window_tokens,
                     "provider": provider,
+                    "task": route.task if route else "general",
+                    "model": route.model if route else "",
                 }
             )
             self.write_ndjson_event(
@@ -405,6 +467,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     )
                     wrote_token = True
                 assistant_parts.append(chunk)
+                REDIS.append_stream_text(conversation_id, chunk)
                 self.write_ndjson_event({"type": "delta", "content": chunk})
 
             assistant_text = "".join(assistant_parts).strip()
@@ -413,8 +476,10 @@ class AIOSHandler(BaseHTTPRequestHandler):
             )
             assistant_message = STORE.add_message(conversation_id, "assistant", assistant_text, thread_id=thread_id)
             upsert_vector_records([vector_record_for_message(conversation_id, assistant_message)])
-            STORE.update_short_term_memory(conversation_id)
+            memory = STORE.update_short_term_memory(conversation_id)
+            REDIS.set_temporary_memory(conversation_id, memory)
             STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
+            REDIS.set_stream_state(conversation_id, {"status": "complete", "session_id": session_id, "thread_id": thread_id})
             self.write_ndjson_event(
                 {
                     "type": "done",
@@ -433,6 +498,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     thread_id=thread_id,
                 )
             STORE.set_recovery_state(conversation_id, {"status": "interrupted", "thread_id": thread_id})
+            REDIS.set_stream_state(conversation_id, {"status": "interrupted", "session_id": session_id, "thread_id": thread_id})
             return
 
     def serve_static(self, path: str) -> None:
@@ -487,11 +553,13 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 return value.strip()
         return self.headers.get("X-AIOS-Session-Id", "").strip()
 
-    def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+    def send_json(self, payload: dict[str, Any], status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -515,6 +583,13 @@ def compact_conversations(conversations: list[dict[str, Any]]) -> list[dict[str,
         }
         for item in conversations
     ]
+
+
+def active_session(session_id: str | None = None) -> dict[str, Any]:
+    cached = REDIS.get_active_session(session_id) if session_id else None
+    session = cached or STORE.get_or_create_session(session_id)
+    REDIS.set_active_session(session["id"], session)
+    return session
 
 
 def conversation_messages_for_llm(
@@ -1176,10 +1251,12 @@ def vector_records_for_artifact(artifact: dict[str, Any]) -> list[dict[str, Any]
             continue
         chunk_id = str(chunk.get("id") or f"chunk-{int(chunk.get('index', 0)) + 1:04d}")
         record_id = f"{artifact['id']}:{chunk_id}"
+        extension = Path(str(artifact.get("filename") or "")).suffix.lower()
+        source_type = "code" if extension in {".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".sql", ".html", ".css", ".sh", ".yaml", ".yml"} else "document"
         records.append(
             {
                 "id": record_id,
-                "source_type": "document",
+                "source_type": source_type,
                 "artifact_id": artifact["id"],
                 "chunk_id": chunk_id,
                 "chunk_index": int(chunk.get("index", len(records))),
@@ -1272,46 +1349,27 @@ def index_long_term_memory(memory: dict[str, Any]) -> None:
 
 
 def load_vector_records() -> list[dict[str, Any]]:
-    if not VECTOR_INDEX.exists():
-        return []
-    with VECTOR_INDEX.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    return payload.get("records", [])
+    return active_vector_store().load()
 
 
 def save_vector_records(records: list[dict[str, Any]]) -> None:
-    VECTOR_INDEX.parent.mkdir(parents=True, exist_ok=True)
-    with VECTOR_INDEX.open("w", encoding="utf-8") as handle:
-        json.dump(
-            {
-                "embedding_model": EMBEDDING_MODEL,
-                "embedding_dimensions": EMBEDDING_DIMENSIONS,
-                "record_count": len(records),
-                "updated_at": utc_now(),
-                "records": records,
-            },
-            handle,
-            indent=2,
-        )
+    active_vector_store().replace_all(records)
 
 
 def upsert_vector_records(records: list[dict[str, Any]]) -> None:
-    if not records:
-        return
-    existing = load_vector_records()
-    replacement_ids = {record["id"] for record in records}
-    artifact_ids = {record.get("artifact_id") for record in records if record.get("artifact_id")}
-    retained = [
-        record
-        for record in existing
-        if record.get("id") not in replacement_ids and record.get("artifact_id") not in artifact_ids
-    ]
-    save_vector_records([*records, *retained])
+    active_vector_store().upsert(records)
 
 
 def replace_vector_source(source_type: str, records: list[dict[str, Any]]) -> None:
-    retained = [record for record in load_vector_records() if record.get("source_type", "document") != source_type]
-    save_vector_records([*records, *retained])
+    active_vector_store().replace_source(source_type, records)
+
+
+def active_vector_store():
+    """Honor test/runtime path overrides when the JSON fallback is active."""
+    from app.vector_store import JsonVectorStore
+    if isinstance(VECTOR_STORE, JsonVectorStore) and VECTOR_STORE.path != VECTOR_INDEX:
+        return JsonVectorStore(VECTOR_INDEX, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS)
+    return VECTOR_STORE
 
 
 def semantic_search(

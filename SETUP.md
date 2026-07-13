@@ -69,3 +69,70 @@ http://127.0.0.1:8000/api/health
 ## Next Development Step
 
 Add file upload and RAG now that the real model calls and streaming responses are in place.
+
+## PostgreSQL schema
+
+Create a PostgreSQL role and database, then put its connection URL in `.env`:
+
+```text
+DATABASE_URL=postgresql://aios:your_password@127.0.0.1:5432/aios
+```
+
+Install the database driver and apply all versioned migrations:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m app.migrate
+```
+
+The migrations create `users`, `sessions`, `chats`, `projects`, `files`,
+`settings`, `api_keys`, `logs`, and `analytics`, their indexes and foreign keys, automatic
+`updated_at` triggers, and a `schema_migrations` ledger. API keys must be
+encrypted by the application before their ciphertext is stored in
+`api_keys.encrypted_secret`; plaintext secrets must never be inserted.
+The migration is safe to run again. When `DATABASE_URL` is configured and
+`AIOS_STORAGE_BACKEND=auto` (the default), sessions and chats use PostgreSQL.
+Use `AIOS_STORAGE_BACKEND=json` only when you explicitly want local JSON.
+
+## Redis ephemeral state
+
+Start Redis locally with Docker and configure the connection:
+
+```powershell
+docker run --name aios-redis -p 6379:6379 -d redis:7-alpine
+```
+
+```text
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+Install dependencies with `python -m pip install -r requirements.txt`, then
+restart the app. Redis stores TTL-backed active sessions, cache entries,
+stream recovery state, and queue job state. PostgreSQL remains authoritative;
+the app degrades gracefully when Redis is unavailable.
+
+Temporary conversation memory expires after `AIOS_REDIS_MEMORY_TTL` seconds.
+Chat requests use an atomic fixed-window rate limit configured by
+`AIOS_CHAT_RATE_LIMIT` requests per `AIOS_CHAT_RATE_WINDOW` seconds. When Redis
+is unavailable, rate limiting fails open so local development remains usable.
+
+## Qdrant vector storage
+
+Start Qdrant with a persistent Docker volume:
+
+```powershell
+docker run --name aios-qdrant -p 6333:6333 -p 6334:6334 -v aios-qdrant-data:/qdrant/storage -d qdrant/qdrant:latest
+```
+
+Configure `QDRANT_URL=http://127.0.0.1:6333` and run
+`python -m app.import_vectors_to_qdrant` once. Index the current repository with
+`python -m app.index_workspace_code`. The `aios_embeddings` collection
+stores document, memory, code, and conversation points in one collection with
+filterable `source_type` payloads. Uploaded bytes remain under `data/uploads`
+and artifact metadata remains in `data/uploads.json`.
+
+Import existing local sessions and conversations once before starting the app:
+
+```powershell
+python -m app.import_json_store
+```

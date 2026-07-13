@@ -261,7 +261,10 @@ newChat.addEventListener("click", async () => {
 });
 
 async function loadConversations() {
-  const response = await fetch(`/api/conversations?session_id=${encodeURIComponent(activeSessionId)}`);
+  // Recent chat history is account-wide for this local single-user app. Sessions
+  // scope working context, but must not hide persisted conversations after a
+  // browser restart, local-storage reset, or migration from pre-session data.
+  const response = await fetch("/api/conversations");
   const payload = await response.json();
   const conversations = payload.conversations || [];
   conversationList.innerHTML = "";

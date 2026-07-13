@@ -11,3 +11,4 @@ Thumbs.db
 data/*.json
 !data/.gitkeep
 data/uploads/
+data/qdrant/

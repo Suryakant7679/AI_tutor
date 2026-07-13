@@ -13,6 +13,9 @@ The project is currently a clean starter version of a larger AIOS architecture. 
 - Stream cancellation and interrupted-stream recovery
 - Browser speech-to-text input and text-to-speech output
 - Provider fallback across Groq, Gemini, OpenAI, and DeepSeek
+- Task-aware model routing for coding, reasoning, vision, math, research, and general chat
+- Local provider usage and configurable cost estimation at `/api/usage`
+- Qdrant storage for document, memory, code, and conversation embeddings
 - Dependency-free Python backend using the standard library
 - Regression tests for parsing, streaming, and provider behavior
 
@@ -67,12 +70,21 @@ The app loads `.env` on startup. Restart the server after changing provider keys
 | --- | --- |
 | `AIOS_HOST` | Local host for the server. Defaults to `127.0.0.1`. |
 | `AIOS_PORT` | Local port for the server. Defaults to `8000`. |
-| `AIOS_DATA_FILE` | Conversation storage path. Defaults to `data/conversations.json`. |
+| `AIOS_DATA_FILE` | Legacy/local JSON conversation path. |
+| `AIOS_STORAGE_BACKEND` | `auto`, `postgres`, or `json`; auto selects PostgreSQL when configured. |
+| `DATABASE_URL` | PostgreSQL connection URL for runtime session/chat storage. |
 | `AIOS_PROVIDER` | Provider mode: `auto`, `groq`, `gemini`, `openai`, or `deepseek`. |
 | `AIOS_DEFAULT_MODEL` | Optional model override used when provider-specific values are blank. |
 | `AIOS_TEMPERATURE` | Model temperature. |
 | `AIOS_LLM_TIMEOUT` | Provider request timeout in seconds. |
 | `AIOS_LLM_RETRIES` | Retry count for non-streaming calls. |
+| `AIOS_USAGE_FILE` | JSON usage ledger. Defaults to `data/llm_usage.json`. |
+
+Task routes can override the global provider/model with variables such as
+`AIOS_CODING_PROVIDER` and `AIOS_CODING_GROQ_MODEL`. The same pattern applies
+to `REASONING`, `VISION`, `MATH`, `RESEARCH`, and `GENERAL`. Cost estimates use
+`AIOS_<PROVIDER>_INPUT_COST_PER_MILLION` and
+`AIOS_<PROVIDER>_OUTPUT_COST_PER_MILLION`; rates default to zero until configured.
 
 Provider-specific model variables:
 
@@ -97,7 +109,12 @@ AI_tutor/
     config.py        .env loading and configured key detection
     llm.py           provider calls, fallback, streaming parsers
     main.py          HTTP server, API routes, static file serving
+    migrate.py       versioned PostgreSQL migration runner
     store.py         local JSON conversation storage
+  migrations/
+    001_create_users_chats_sessions.sql
+    002_create_projects_files_settings_api_keys.sql
+    003_create_logs_analytics.sql
   data/
     .gitkeep         keeps the data folder in Git
   docs/
@@ -118,6 +135,7 @@ AI_tutor/
 | --- | --- | --- |
 | `GET` | `/api/health` | Returns server status and configured API key names. |
 | `GET` | `/api/conversations` | Lists saved conversations. |
+| `GET` | `/api/usage` | Returns accumulated provider token and cost estimates. |
 | `POST` | `/api/conversations` | Creates a new conversation. |
 | `GET` | `/api/conversations/{id}` | Loads one conversation and its messages. |
 | `POST` | `/api/chat` | Sends a user message and returns a normal or streaming assistant reply. |

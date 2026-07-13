@@ -41,10 +41,10 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 - [x] DeepSeek provider support
 - [x] Per-provider model environment variables
 - [x] LLM timeout and retry configuration
-- [ ] Formal model router interface
-- [ ] Task-based model selection for coding, reasoning, vision, math, research, and general chat
+- [x] Formal model router interface
+- [x] Task-based model selection for coding, reasoning, vision, math, research, and general chat
 - [ ] Local Ollama model support
-- [ ] Provider usage and cost tracking
+- [x] Provider usage and cost tracking
 
 ## Checkpoint 3: Streaming Engine
 
@@ -222,27 +222,27 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 ## Checkpoint 13: Data Layer
 
 - [x] Local JSON conversation storage
-- [ ] PostgreSQL users table
-- [ ] PostgreSQL chats table
-- [ ] PostgreSQL sessions table
-- [ ] PostgreSQL projects table
-- [ ] PostgreSQL files table
-- [ ] PostgreSQL settings table
-- [ ] PostgreSQL API keys table
-- [ ] PostgreSQL logs table
-- [ ] PostgreSQL analytics table
-- [ ] Redis active sessions
-- [ ] Redis cache
-- [ ] Redis streaming state
-- [ ] Redis queue state
-- [ ] Redis temporary memory
-- [ ] Redis rate limits
-- [ ] Qdrant document embeddings
-- [ ] Qdrant memory embeddings
-- [ ] Qdrant code embeddings
-- [ ] Qdrant conversation embeddings
-- [ ] Local uploaded file storage
-- [ ] Local artifact storage
+- [x] PostgreSQL users table
+- [x] PostgreSQL chats table
+- [x] PostgreSQL sessions table
+- [x] PostgreSQL projects table
+- [x] PostgreSQL files table
+- [x] PostgreSQL settings table
+- [x] PostgreSQL API keys table
+- [x] PostgreSQL logs table
+- [x] PostgreSQL analytics table
+- [x] Redis active sessions
+- [x] Redis cache
+- [x] Redis streaming state
+- [x] Redis queue state
+- [x] Redis temporary memory
+- [x] Redis rate limits
+- [x] Qdrant document embeddings
+- [x] Qdrant memory embeddings
+- [x] Qdrant code embeddings
+- [x] Qdrant conversation embeddings
+- [x] Local uploaded file storage
+- [x] Local artifact storage
 
 ## Checkpoint 14: Background Workers
 

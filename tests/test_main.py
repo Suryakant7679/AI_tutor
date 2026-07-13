@@ -1,9 +1,17 @@
 import os
+os.environ.setdefault("AIOS_VECTOR_BACKEND", "json")
 import tempfile
 import unittest
 from pathlib import Path
 
 from app.llm import gemini_models_to_try, parse_chat_completion_stream_event, parse_gemini_stream_event
+from app.model_router import EnvironmentModelRouter
+from app.usage import UsageTracker
+from app.migrate import migration_files
+from app.postgres_store import PostgreSQLConversationStore
+from app.storage import create_store
+from app.redis_state import RedisState
+from app.vector_store import JsonVectorStore
 from app.main import (
     artifact_category,
     browser_results_context_text,
@@ -101,6 +109,184 @@ class GeminiModelFallbackTests(unittest.TestCase):
                 os.environ["AIOS_GEMINI_MODEL"] = old_value
             if old_default is not None:
                 os.environ["AIOS_DEFAULT_MODEL"] = old_default
+
+
+class ModelRouterTests(unittest.TestCase):
+    def test_router_classifies_supported_task_types(self) -> None:
+        router = EnvironmentModelRouter()
+        examples = {
+            "coding": "Debug this Python function",
+            "reasoning": "Analyze the trade-offs in this strategy",
+            "vision": "Describe this screenshot",
+            "math": "Calculate 12 * 14",
+            "research": "Research papers and provide citations",
+            "general": "Hello, how are you?",
+        }
+        for expected, message in examples.items():
+            with self.subTest(expected=expected):
+                self.assertEqual(router.classify([{"role": "user", "content": message}]), expected)
+
+    def test_task_provider_and_model_overrides_are_resolved(self) -> None:
+        old_provider = os.environ.get("AIOS_CODING_PROVIDER")
+        old_model = os.environ.get("AIOS_CODING_GROQ_MODEL")
+        try:
+            os.environ["AIOS_CODING_PROVIDER"] = "groq"
+            os.environ["AIOS_CODING_GROQ_MODEL"] = "coding-model"
+            routes = EnvironmentModelRouter().routes(
+                [{"role": "user", "content": "Write Python code"}], ["groq", "gemini"]
+            )
+            self.assertEqual((routes[0].task, routes[0].provider, routes[0].model), ("coding", "groq", "coding-model"))
+        finally:
+            if old_provider is None:
+                os.environ.pop("AIOS_CODING_PROVIDER", None)
+            else:
+                os.environ["AIOS_CODING_PROVIDER"] = old_provider
+            if old_model is None:
+                os.environ.pop("AIOS_CODING_GROQ_MODEL", None)
+            else:
+                os.environ["AIOS_CODING_GROQ_MODEL"] = old_model
+
+
+class UsageTrackerTests(unittest.TestCase):
+    def test_usage_is_persisted_and_summarized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tracker = UsageTracker(os.path.join(temp_dir, "usage.json"))
+            entry = tracker.record(
+                "groq", "test-model", "coding", [{"role": "user", "content": "hello"}], "world"
+            )
+            summary = tracker.summary()
+            self.assertEqual(summary["requests"], 1)
+            self.assertEqual(summary["by_provider"]["groq"]["requests"], 1)
+            self.assertEqual(summary["total_tokens"], entry["total_tokens"])
+
+
+class PostgreSQLMigrationTests(unittest.TestCase):
+    def test_initial_migration_defines_required_tables_and_relationships(self) -> None:
+        files = migration_files()
+        self.assertTrue(files)
+        sql = files[0].read_text(encoding="utf-8").lower()
+        for table in ("users", "sessions", "chats"):
+            self.assertIn(f"create table if not exists {table}", sql)
+        self.assertIn("user_id uuid references users(id)", sql)
+        self.assertIn("session_id uuid references sessions(id)", sql)
+        self.assertIn("create unique index if not exists users_email_lower_unique", sql)
+
+    def test_second_migration_defines_project_file_setting_and_api_key_tables(self) -> None:
+        files = migration_files()
+        self.assertGreaterEqual(len(files), 2)
+        sql = files[1].read_text(encoding="utf-8").lower()
+        for table in ("projects", "files", "settings", "api_keys"):
+            self.assertIn(f"create table if not exists {table}", sql)
+        self.assertIn("project_id uuid references projects(id)", sql)
+        self.assertIn("chat_id uuid references chats(id)", sql)
+        self.assertIn("encrypted_secret bytea not null", sql)
+        self.assertNotIn("api_key text", sql)
+
+    def test_third_migration_defines_structured_logs_and_analytics(self) -> None:
+        files = migration_files()
+        self.assertGreaterEqual(len(files), 3)
+        sql = files[2].read_text(encoding="utf-8").lower()
+        for table in ("logs", "analytics"):
+            self.assertIn(f"create table if not exists {table}", sql)
+        self.assertIn("context jsonb not null", sql)
+        self.assertIn("properties jsonb not null", sql)
+        self.assertIn("estimated_cost_usd numeric", sql)
+        self.assertIn("logs_created_at_idx", sql)
+        self.assertIn("analytics_event_time_idx", sql)
+
+
+class StorageBackendTests(unittest.TestCase):
+    def test_postgres_store_serializes_uuid_and_timestamp_rows(self) -> None:
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        row = {"id": __import__("uuid").uuid4(), "session_id": None, "created_at": now}
+        converted = PostgreSQLConversationStore._chat_from_row(row)
+        self.assertIsInstance(converted["id"], str)
+        self.assertEqual(converted["created_at"], now.isoformat())
+
+    def test_json_backend_can_be_forced(self) -> None:
+        old_backend = os.environ.get("AIOS_STORAGE_BACKEND")
+        try:
+            os.environ["AIOS_STORAGE_BACKEND"] = "json"
+            self.assertIs(type(create_store()), ConversationStore)
+        finally:
+            if old_backend is None:
+                os.environ.pop("AIOS_STORAGE_BACKEND", None)
+            else:
+                os.environ["AIOS_STORAGE_BACKEND"] = old_backend
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.values = {}
+        self.expirations = {}
+        self.counters = {}
+
+    def ping(self): return True
+    def setex(self, key, ttl, value):
+        self.values[key], self.expirations[key] = value, ttl
+        return True
+    def get(self, key): return self.values.get(key)
+    def expire(self, key, ttl):
+        self.expirations[key] = ttl
+        return key in self.values
+    def delete(self, *keys):
+        count = sum(key in self.values for key in keys)
+        for key in keys: self.values.pop(key, None)
+        return count
+    def eval(self, script, key_count, key, window):
+        self.counters[key] = self.counters.get(key, 0) + 1
+        return [self.counters[key], int(window)]
+
+
+class RedisStateTests(unittest.TestCase):
+    def test_active_sessions_use_namespaced_json_and_ttl(self) -> None:
+        client = _FakeRedis()
+        state = RedisState(client, "test")
+        self.assertTrue(state.set_active_session("session-1", {"id": "session-1"}))
+        self.assertEqual(state.get_active_session("session-1"), {"id": "session-1"})
+        self.assertEqual(client.expirations["test:session:session-1"], state.session_ttl)
+
+    def test_cache_round_trip_and_delete(self) -> None:
+        client = _FakeRedis()
+        state = RedisState(client, "test")
+        state.cache_set("answer", {"value": 42})
+        self.assertEqual(state.cache_get("answer"), {"value": 42})
+        self.assertTrue(state.cache_delete("answer"))
+        self.assertIsNone(state.cache_get("answer"))
+
+    def test_stream_state_round_trip(self) -> None:
+        state = RedisState(_FakeRedis(), "test")
+        state.set_stream_state("chat-1", {"status": "running"})
+        self.assertEqual(state.get_stream_state("chat-1")["status"], "running")
+
+    def test_temporary_memory_round_trip_renews_ttl(self) -> None:
+        client = _FakeRedis()
+        state = RedisState(client, "test")
+        state.set_temporary_memory("chat-1", {"task": "debug"})
+        memory = state.get_temporary_memory("chat-1")
+        self.assertEqual(memory["task"], "debug")
+        self.assertIn("cached_at", memory)
+        self.assertEqual(client.expirations["test:memory:chat-1"], state.memory_ttl)
+
+    def test_rate_limit_blocks_after_limit_and_hashes_identity(self) -> None:
+        client = _FakeRedis()
+        state = RedisState(client, "test")
+        self.assertTrue(state.rate_limit("private-user-id", 2, 60)["allowed"])
+        self.assertTrue(state.rate_limit("private-user-id", 2, 60)["allowed"])
+        limited = state.rate_limit("private-user-id", 2, 60)
+        self.assertFalse(limited["allowed"])
+        self.assertEqual(limited["remaining"], 0)
+        self.assertTrue(all("private-user-id" not in key for key in client.counters))
+
+
+class VectorStoreTests(unittest.TestCase):
+    def test_json_vector_store_upserts_and_replaces_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = JsonVectorStore(Path(temp_dir) / "vectors.json", "test", 8)
+            store.upsert([{"id": "d1", "source_type": "document", "embedding": [0.0] * 8}])
+            store.upsert([{"id": "m1", "source_type": "memory", "embedding": [1.0] * 8}])
+            store.replace_source("memory", [{"id": "m2", "source_type": "memory", "embedding": [0.5] * 8}])
+            self.assertEqual({item["id"] for item in store.load()}, {"d1", "m2"})
 
 
 class StreamingChunkingTests(unittest.TestCase):
