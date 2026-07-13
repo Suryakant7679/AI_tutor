@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -149,10 +151,12 @@ class RedisState:
 
     def claim(self, queue: str, timeout: int = 0) -> dict[str, Any] | None:
         try:
-            job_id = self.client.brpoplpush(
-                self._key(f"queue:{queue}:pending"),
-                self._key(f"queue:{queue}:processing"),
-                timeout=timeout,
+            pending = self._key(f"queue:{queue}:pending")
+            processing = self._key(f"queue:{queue}:processing")
+            job_id = (
+                self.client.brpoplpush(pending, processing, timeout=timeout)
+                if timeout > 0
+                else self.client.rpoplpush(pending, processing)
             )
             if not job_id:
                 return None
@@ -182,6 +186,43 @@ class RedisState:
         except Exception:
             return False
 
+    def queue_status(self) -> dict[str, Any]:
+        queues: dict[str, dict[str, int]] = {}
+        try:
+            for key in self.client.scan_iter(match=self._key("queue:*")):
+                key = str(key)
+                if self.client.type(key) != "list":
+                    continue
+                parts = key.split(":")
+                if len(parts) < 4 or parts[-1] not in {"pending", "processing", "completed", "failed"}:
+                    continue
+                queue, status = parts[-2], parts[-1]
+                queues.setdefault(queue, {"pending": 0, "processing": 0, "completed": 0, "failed": 0})[status] = int(self.client.llen(key))
+            return {"available": True, "queues": queues, "totals": {status: sum(item[status] for item in queues.values()) for status in ("pending", "processing", "completed", "failed")}}
+        except Exception as exc:
+            return {"available": False, "queues": {}, "totals": {}, "error": str(exc)}
+    def cleanup_expired_state(self) -> dict[str, Any]:
+        """Remove orphaned queue references; Redis expires cache/job values itself."""
+        removed = 0
+        lists = 0
+        try:
+            pattern = self._key("queue:*")
+            for key in self.client.scan_iter(match=pattern):
+                key = str(key)
+                if self.client.type(key) != "list":
+                    continue
+                parts = key.split(":")
+                if len(parts) < 4 or parts[-1] not in {"pending", "processing", "completed", "failed"}:
+                    continue
+                lists += 1
+                queue = parts[-2]
+                for job_id in self.client.lrange(key, 0, -1):
+                    if not self.client.exists(self._key(f"queue:{queue}:job:{job_id}")):
+                        removed += int(self.client.lrem(key, 0, job_id) or 0)
+            cache_keys = sum(1 for _ in self.client.scan_iter(match=self._key("cache:*")))
+            return {"available": True, "orphaned_queue_references_removed": removed, "queue_lists_scanned": lists, "live_cache_keys": cache_keys}
+        except Exception as exc:
+            return {"available": False, "orphaned_queue_references_removed": removed, "queue_lists_scanned": lists, "error": str(exc)}
     def _key(self, suffix: str) -> str:
         return f"{self.namespace}:{suffix}"
 
@@ -212,7 +253,11 @@ class RedisState:
 
 
 class NullRedisState:
-    """No-op fallback used when Redis is unconfigured or unavailable."""
+    """Local fallback; durable features no-op while rate limiting stays enforced."""
+
+    def __init__(self) -> None:
+        self._rate_lock = threading.Lock()
+        self._rate_buckets: dict[str, int] = {}
 
     def ping(self) -> bool: return False
     def set_active_session(self, *args: Any, **kwargs: Any) -> bool: return False
@@ -224,12 +269,33 @@ class NullRedisState:
     def get_temporary_memory(self, *args: Any, **kwargs: Any) -> None: return None
     def delete_temporary_memory(self, *args: Any, **kwargs: Any) -> bool: return False
     def rate_limit(self, identifier: str, limit: int, window_seconds: int, scope: str = "api") -> dict[str, Any]:
-        return {"allowed": True, "limit": limit, "remaining": limit, "retry_after": 0, "available": False}
+        limit, window_seconds = max(1, limit), max(1, window_seconds)
+        now = int(time.time())
+        bucket = now // window_seconds
+        identity_hash = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
+        key = f"{scope}:{identity_hash}:{bucket}"
+        with self._rate_lock:
+            count = self._rate_buckets.get(key, 0) + 1
+            self._rate_buckets[key] = count
+            if len(self._rate_buckets) > 10_000:
+                active_suffix = f":{bucket}"
+                self._rate_buckets = {item: value for item, value in self._rate_buckets.items() if item.endswith(active_suffix)}
+        retry_after = window_seconds - (now % window_seconds)
+        return {
+            "allowed": count <= limit,
+            "limit": limit,
+            "remaining": max(0, limit - count),
+            "retry_after": retry_after,
+            "available": True,
+            "backend": "memory",
+        }
     def set_stream_state(self, *args: Any, **kwargs: Any) -> bool: return False
     def get_stream_state(self, *args: Any, **kwargs: Any) -> None: return None
     def get_stream_text(self, *args: Any, **kwargs: Any) -> str: return ""
     def append_stream_text(self, *args: Any, **kwargs: Any) -> bool: return False
     def clear_stream_state(self, *args: Any, **kwargs: Any) -> bool: return False
+    def queue_status(self) -> dict[str, Any]: return {"available": False, "queues": {}, "totals": {}}
+    def cleanup_expired_state(self) -> dict[str, Any]: return {"available": False, "orphaned_queue_references_removed": 0}
     def enqueue(self, *args: Any, **kwargs: Any) -> None: return None
     def claim(self, *args: Any, **kwargs: Any) -> None: return None
     def finish(self, *args: Any, **kwargs: Any) -> bool: return False

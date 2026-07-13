@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import hashlib
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -30,9 +31,14 @@ try:
     from app.redis_state import create_redis_state
     from app.store import utc_now
     from app.vector_store import create_vector_store
+    from app.observability import OBSERVABILITY
     from app.agents.planner import PlannerAgent
     from app.agents.orchestrator import LangGraphOrchestrator
     from app.agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
+    from app.gateway import (
+        AUTH_RESPONSE_SCHEMA, AUTH_SCHEMA, CHAT_SCHEMA, CONVERSATION_SCHEMA, LOGIN_SCHEMA, MEMORY_SCHEMA, PLAN_SCHEMA, SESSION_RESPONSE_SCHEMA, SESSION_SCHEMA, THREAD_SCHEMA, GatewayError, GatewayStore,
+        JWTService, Principal, bearer_token, create_gateway_store, error_payload, normalize_api_path, require_owner,
+    )
 except ModuleNotFoundError:
     from config import configured_api_keys, load_env
     from llm import LLMError, USAGE, current_route, generate_response, generate_response_stream
@@ -40,12 +46,17 @@ except ModuleNotFoundError:
     from redis_state import create_redis_state
     from store import utc_now
     from vector_store import create_vector_store
+    from observability import OBSERVABILITY
     from agents.planner import PlannerAgent
     from agents.orchestrator import LangGraphOrchestrator
     from agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
+    from gateway import (
+        AUTH_RESPONSE_SCHEMA, AUTH_SCHEMA, CHAT_SCHEMA, CONVERSATION_SCHEMA, LOGIN_SCHEMA, MEMORY_SCHEMA, PLAN_SCHEMA, SESSION_RESPONSE_SCHEMA, SESSION_SCHEMA, THREAD_SCHEMA, GatewayError, GatewayStore,
+        JWTService, Principal, bearer_token, create_gateway_store, error_payload, normalize_api_path, require_owner,
+    )
 
 
-load_env()
+load_env(override=False)
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
 STORE = create_store()
@@ -54,12 +65,23 @@ UPLOAD_ROOT = ROOT / os.getenv("AIOS_UPLOAD_DIR", "data/uploads")
 UPLOAD_INDEX = ROOT / os.getenv("AIOS_UPLOAD_INDEX", "data/uploads.json")
 VECTOR_INDEX = ROOT / os.getenv("AIOS_VECTOR_INDEX", "data/vectors.json")
 MAX_UPLOAD_BYTES = int(os.getenv("AIOS_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+MAX_API_BODY_BYTES = int(os.getenv("AIOS_MAX_API_BODY_BYTES", str(1024 * 1024)))
 EMBEDDING_DIMENSIONS = int(os.getenv("AIOS_EMBEDDING_DIMENSIONS", "64"))
 EMBEDDING_MODEL = os.getenv("AIOS_EMBEDDING_MODEL", "local-hash-v1")
 RAG_TOP_K = int(os.getenv("AIOS_RAG_TOP_K", "5"))
 VECTOR_STORE = create_vector_store(VECTOR_INDEX, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS)
 CHAT_RATE_LIMIT = int(os.getenv("AIOS_CHAT_RATE_LIMIT", "30"))
 CHAT_RATE_WINDOW = int(os.getenv("AIOS_CHAT_RATE_WINDOW", "60"))
+API_RATE_LIMIT = int(os.getenv("AIOS_API_RATE_LIMIT", "120"))
+API_RATE_WINDOW = int(os.getenv("AIOS_API_RATE_WINDOW", "60"))
+AUTH_REQUIRED = os.getenv("AIOS_AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
+GATEWAY_STORE = create_gateway_store(ROOT)
+JWT = JWTService(
+    os.getenv("AIOS_JWT_SECRET", "").strip() or GATEWAY_STORE.jwt_secret(),
+    issuer=os.getenv("AIOS_JWT_ISSUER", "aios"),
+    audience=os.getenv("AIOS_JWT_AUDIENCE", "aios-api"),
+    ttl_seconds=int(os.getenv("AIOS_JWT_TTL", "3600")),
+)
 PLANNER = PlannerAgent()
 SPECIALIST_AGENTS = SpecialistAgentRegistry(
     memory=MemoryAgent(STORE),
@@ -71,9 +93,78 @@ ORCHESTRATOR = LangGraphOrchestrator(planner=PLANNER, agents=SPECIALIST_AGENTS)
 class AIOSHandler(BaseHTTPRequestHandler):
     server_version = "AIOSStarter/0.1"
 
+    @property
+    def user_id(self) -> str | None:
+        principal = getattr(self, "principal", None)
+        return principal.user_id if principal else None
+
+    def prepare_api_request(self, path: str) -> str | None:
+        supplied_request_id = self.headers.get("X-Request-Id", "").strip()[:128]
+        self.request_id = supplied_request_id if re.fullmatch(r"[A-Za-z0-9._:-]+", supplied_request_id) else str(uuid4())
+        self.request_started = time.perf_counter()
+        self.principal: Principal | None = None
+        self.api_version = "1"
+        try:
+            normalized, self.api_version = normalize_api_path(path)
+            token = bearer_token(self.headers.get("Authorization", ""))
+            if token:
+                self.principal = JWT.verify(token)
+                if not GATEWAY_STORE.get_user(self.principal.user_id):
+                    raise GatewayError(401, "invalid_token", "Bearer token user no longer exists.")
+            public = normalized in {"/api/health", "/api/auth/register", "/api/auth/login"}
+            if AUTH_REQUIRED and not public and not self.principal:
+                raise GatewayError(401, "authentication_required", "A Bearer access token is required.")
+            identity = self.user_id or self.client_address[0]
+            scope = "auth" if normalized.startswith("/api/auth/") else "api"
+            limit = max(5, API_RATE_LIMIT // 4) if scope == "auth" else API_RATE_LIMIT
+            rate = REDIS.rate_limit(identity, limit, API_RATE_WINDOW, scope)
+            self.rate_headers = {
+                "X-RateLimit-Limit": str(rate["limit"]),
+                "X-RateLimit-Remaining": str(rate["remaining"]),
+            }
+            if not rate["allowed"]:
+                raise GatewayError(429, "rate_limit_exceeded", "API rate limit exceeded.", [f"Retry after {rate['retry_after']} seconds."])
+            return normalized
+        except GatewayError as exc:
+            headers = {"WWW-Authenticate": 'Bearer realm="aios"'} if exc.status == 401 else {}
+            if exc.status == 429:
+                headers["Retry-After"] = str(API_RATE_WINDOW)
+            self.send_gateway_error(exc, headers)
+            return None
+
+    def authorize_resource(self, resource: dict[str, Any]) -> bool:
+        try:
+            require_owner(resource, self.principal)
+            return True
+        except GatewayError as exc:
+            self.send_gateway_error(exc)
+            return False
+
+    def authorize_conversation(self, conversation_id: str) -> bool:
+        try:
+            resource = STORE.get_conversation(conversation_id)
+        except KeyError:
+            self.send_gateway_error(GatewayError(404, "conversation_not_found", "Conversation not found."))
+            return False
+        return self.authorize_resource(resource)
+
+    def send_gateway_error(self, error: GatewayError, headers: dict[str, str] | None = None) -> None:
+        OBSERVABILITY.record(
+            "error", error.code, success=False,
+            duration_ms=(time.perf_counter() - self.request_started) * 1000 if getattr(self, "request_started", None) is not None else None,
+            user_id=self.user_id, error=error.message,
+            properties={"status_code": error.status, "path": normalize_api_path(urlparse(self.path).path)[0]},
+        )
+        self.send_json(error_payload(error, getattr(self, "request_id", "")), status=error.status, headers=headers)
+
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
         path = parsed_url.path
+        if path.startswith("/api"):
+            prepared = self.prepare_api_request(path)
+            if prepared is None:
+                return
+            path = prepared
         if path == "/api/health":
             self.send_json(
                 {
@@ -86,12 +177,41 @@ class AIOSHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/session":
             requested_session_id = self.session_id_from_request(parsed_url.query)
-            session = active_session(requested_session_id)
+            try:
+                session = active_session(requested_session_id, self.user_id)
+            except PermissionError:
+                self.send_gateway_error(GatewayError(403, "forbidden", "Session belongs to another user."))
+                return
             REDIS.set_active_session(session["id"], session)
-            self.send_json({"session": session})
+            self.send_json(SESSION_RESPONSE_SCHEMA.validate({"session": session}))
+            return
+        if path == "/api/auth/me":
+            if not self.principal:
+                self.send_gateway_error(GatewayError(401, "authentication_required", "Authentication is required."))
+                return
+            self.send_json({"user": GATEWAY_STORE.get_user(self.principal.user_id), "session_id": self.principal.session_id})
+            return
+        if path == "/api/observability":
+            if AUTH_REQUIRED and (not self.principal or not self.principal.has_role("admin")):
+                self.send_gateway_error(GatewayError(403, "forbidden", "Administrator role is required."))
+                return
+            self.send_json({"observability": OBSERVABILITY.dashboard(GATEWAY_STORE, USAGE, REDIS, ROOT)})
+            return
+        if path == "/api/analytics":
+            if not self.principal or not self.principal.has_role("admin"):
+                self.send_gateway_error(GatewayError(403, "forbidden", "Administrator role is required."))
+                return
+            query = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
+            try:
+                limit = int(query.get("limit", 100))
+            except ValueError:
+                limit = 100
+            self.send_json({"events": GATEWAY_STORE.analytics(limit)})
             return
         if path.startswith("/api/streams/"):
             conversation_id = path.rsplit("/", 1)[-1]
+            if not self.authorize_conversation(conversation_id):
+                return
             self.send_json({
                 "conversation_id": conversation_id,
                 "state": REDIS.get_stream_state(conversation_id),
@@ -99,17 +219,22 @@ class AIOSHandler(BaseHTTPRequestHandler):
             })
             return
         if path == "/api/memory":
-            self.send_json({"memory": STORE.get_long_term_memory()})
+            self.send_json({"memory": STORE.get_long_term_memory(self.user_id)})
             return
         if path == "/api/memory/temporary":
             query = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
             conversation_id = str(query.get("conversation_id") or "").strip()
             if not conversation_id:
-                self.send_json({"error": "conversation_id is required"}, status=400)
+                self.send_gateway_error(GatewayError(400, "missing_conversation_id", "conversation_id is required."))
+                return
+            if not self.authorize_conversation(conversation_id):
                 return
             self.send_json({"conversation_id": conversation_id, "memory": REDIS.get_temporary_memory(conversation_id)})
             return
         if path == "/api/usage":
+            if AUTH_REQUIRED and (not self.principal or not self.principal.has_role("admin")):
+                self.send_gateway_error(GatewayError(403, "forbidden", "Administrator role is required."))
+                return
             self.send_json({"usage": USAGE.summary()})
             return
         if path == "/api/search":
@@ -120,17 +245,22 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 top_k = max(1, min(int(query.get("top_k", RAG_TOP_K)), 50))
             except (TypeError, ValueError):
                 top_k = RAG_TOP_K
-            index_conversation_history(STORE.list_conversations())
-            index_long_term_memory(STORE.get_long_term_memory())
-            self.send_json({"query": text_query, "results": semantic_search(text_query, top_k, source_types or None)})
+            search_conversations = STORE.list_conversations_for_user(self.user_id) if self.user_id else STORE.list_conversations()
+            index_conversation_history(search_conversations)
+            index_long_term_memory(STORE.get_long_term_memory(self.user_id), self.user_id)
+            self.send_json({"query": text_query, "results": semantic_search(text_query, top_k, source_types or None, self.user_id)})
             return
         if path == "/api/conversations":
             session_id = self.session_id_from_request(parsed_url.query)
             conversations = (
                 STORE.list_conversations_for_session(session_id)
                 if session_id
+                else STORE.list_conversations_for_user(self.user_id)
+                if self.user_id
                 else STORE.list_conversations()
             )
+            if self.principal:
+                conversations = STORE.list_conversations() if self.principal.has_role("admin") else [item for item in conversations if item.get("user_id") == self.user_id]
             self.send_json({"conversations": compact_conversations(conversations)})
             return
         if path.startswith("/api/conversations/") and path.endswith("/related"):
@@ -139,6 +269,8 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 conversation = STORE.get_conversation(conversation_id)
             except KeyError:
                 self.send_error(404, "Conversation not found")
+                return
+            if not self.authorize_resource(conversation):
                 return
             query_params = dict(parse_qsl(parsed_url.query, keep_blank_values=False))
             query = str(query_params.get("q") or conversation_search_text(conversation)).strip()
@@ -153,12 +285,17 @@ class AIOSHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/conversations/"):
             conversation_id = path.rsplit("/", 1)[-1]
             try:
-                self.send_json(STORE.get_conversation(conversation_id))
+                conversation = STORE.get_conversation(conversation_id)
+                if self.authorize_resource(conversation):
+                    self.send_json(conversation)
             except KeyError:
                 self.send_error(404, "Conversation not found")
             return
         if path == "/api/uploads":
-            self.send_json({"artifacts": list_artifacts()})
+            artifacts = list_artifacts()
+            if self.principal:
+                artifacts = artifacts if self.principal.has_role("admin") else [item for item in artifacts if item.get("user_id") == self.user_id]
+            self.send_json({"artifacts": artifacts})
             return
         if path.startswith("/api/uploads/") and path.endswith("/similar"):
             artifact_id = path.split("/")[-2]
@@ -166,9 +303,11 @@ class AIOSHandler(BaseHTTPRequestHandler):
             if not artifact:
                 self.send_error(404, "Upload not found")
                 return
+            if not self.authorize_resource(artifact):
+                return
             records = vector_records_for_artifact(artifact)
             upsert_vector_records(records)
-            self.send_json({"artifact_id": artifact_id, "similar": similar_documents(artifact_id)})
+            self.send_json({"artifact_id": artifact_id, "similar": similar_documents(artifact_id, user_id=self.user_id)})
             return
         if path.startswith("/api/uploads/") and path.endswith("/content"):
             artifact_id = path.split("/")[-2]
@@ -178,40 +317,72 @@ class AIOSHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path == "/api/plan":
+        prepared = self.prepare_api_request(path)
+        if prepared is None:
+            return
+        path = prepared
+        if path in {"/api/auth/register", "/api/auth/login"}:
             try:
                 body = self.read_json()
+                schema = AUTH_SCHEMA if path.endswith("register") else LOGIN_SCHEMA
+                body = schema.validate(body)
+                user = (
+                    GATEWAY_STORE.register(body["email"], body["password"], str(body.get("display_name") or ""))
+                    if path.endswith("register")
+                    else GATEWAY_STORE.authenticate(body["email"], body["password"])
+                )
+                session = active_session(None, str(user["id"]))
+                principal = Principal(str(user["id"]), str(user["email"]), tuple(user.get("roles") or ["user"]), session["id"])
+                token = JWT.issue(principal)
+                self.principal = principal
+                response = AUTH_RESPONSE_SCHEMA.validate({"access_token": token, "token_type": "Bearer", "expires_in": JWT.ttl_seconds, "user": user, "session": session})
+                self.send_json(response, status=201 if path.endswith("register") else 200)
+            except (GatewayError, ValueError) as exc:
+                error = exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc))
+                self.send_gateway_error(error)
+            return
+        if path == "/api/plan":
+            try:
+                body = PLAN_SCHEMA.validate(self.read_json())
                 objective = str(body.get("objective") or "").strip()
                 context = optional_dict(body, "context") or {}
                 self.send_json({"plan": PLANNER.plan_dict(objective, context)}, status=201)
             except ValueError as exc:
-                self.send_json({"error": str(exc)}, status=400)
+                self.send_gateway_error(exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc)))
             return
         if path == "/api/orchestrate":
             try:
-                body = self.read_json()
+                body = PLAN_SCHEMA.validate(self.read_json())
                 objective = str(body.get("objective") or "").strip()
                 context = optional_dict(body, "context") or {}
                 self.send_json({"orchestration": ORCHESTRATOR.invoke(objective, context)}, status=201)
             except ValueError as exc:
-                self.send_json({"error": str(exc)}, status=400)
+                self.send_gateway_error(exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc)))
             return
         if path == "/api/conversations":
             try:
-                body = self.read_json()
-            except ValueError:
-                body = {}
+                body = CONVERSATION_SCHEMA.validate(self.read_json())
+            except ValueError as exc:
+                self.send_gateway_error(exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc)))
+                return
             session_id = str(body.get("session_id") or "").strip() or self.session_id_from_request()
-            session = active_session(session_id or None)
-            conversation = STORE.create_conversation(session_id=session["id"])
+            try:
+                session = active_session(session_id or None, self.user_id)
+            except PermissionError:
+                self.send_gateway_error(GatewayError(403, "forbidden", "Session belongs to another user."))
+                return
+            conversation = STORE.create_conversation(session_id=session["id"], user_id=self.user_id)
             self.send_json(conversation, status=201)
             return
         if path.startswith("/api/conversations/") and path.endswith("/threads"):
             conversation_id = path.split("/")[-2]
+            if not self.authorize_conversation(conversation_id):
+                return
             try:
-                body = self.read_json()
-            except ValueError:
-                body = {}
+                body = THREAD_SCHEMA.validate(self.read_json())
+            except ValueError as exc:
+                self.send_gateway_error(exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc)))
+                return
             try:
                 thread = STORE.create_thread(conversation_id, str(body.get("title") or "New thread"))
                 self.send_json(thread, status=201)
@@ -220,12 +391,16 @@ class AIOSHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/session":
             try:
-                body = self.read_json()
+                body = SESSION_SCHEMA.validate(self.read_json())
             except ValueError as exc:
-                self.send_json({"error": str(exc)}, status=400)
+                self.send_gateway_error(exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc)))
                 return
             session_id = str(body.get("session_id") or "").strip() or self.session_id_from_request()
-            session = active_session(session_id or None)
+            try:
+                session = active_session(session_id or None, self.user_id)
+            except PermissionError:
+                self.send_gateway_error(GatewayError(403, "forbidden", "Session belongs to another user."))
+                return
             session = STORE.update_session_context(
                 session["id"],
                 active_project=optional_text(body, "active_project"),
@@ -240,15 +415,15 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 developer_instructions=optional_text(body, "developer_instructions"),
                 user_preferences=optional_dict(body, "user_preferences"),
             )
-            index_long_term_memory(STORE.get_long_term_memory())
+            index_long_term_memory(STORE.get_long_term_memory(self.user_id), self.user_id)
             REDIS.set_active_session(session["id"], session)
-            self.send_json({"session": session})
+            self.send_json(SESSION_RESPONSE_SCHEMA.validate({"session": session}))
             return
         if path == "/api/memory":
             try:
-                body = self.read_json()
+                body = MEMORY_SCHEMA.validate(self.read_json())
             except ValueError as exc:
-                self.send_json({"error": str(exc)}, status=400)
+                self.send_gateway_error(exc if isinstance(exc, GatewayError) else GatewayError(400, "invalid_request", str(exc)))
                 return
             memory = STORE.update_long_term_memory(
                 user_preferences=optional_dict(body, "user_preferences"),
@@ -256,15 +431,16 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 projects=optional_project_list(body, "projects"),
                 commands=optional_string_list(body, "commands"),
                 learned_behavior=optional_string_list(body, "learned_behavior"),
+                user_id=self.user_id,
             )
-            index_long_term_memory(memory)
+            index_long_term_memory(memory, self.user_id)
             self.send_json({"memory": memory})
             return
         if path == "/api/uploads":
             try:
                 artifacts = self.receive_uploads()
             except ValueError as exc:
-                self.send_json({"error": str(exc)}, status=400)
+                self.send_gateway_error(GatewayError(400, "invalid_upload", str(exc)))
                 return
             self.send_json({"artifacts": artifacts}, status=201)
             return
@@ -272,9 +448,8 @@ class AIOSHandler(BaseHTTPRequestHandler):
             rate_identity = self.session_id_from_request() or self.client_address[0]
             rate = REDIS.rate_limit(rate_identity, CHAT_RATE_LIMIT, CHAT_RATE_WINDOW, "chat")
             if not rate["allowed"]:
-                self.send_json(
-                    {"error": "Chat rate limit exceeded", "retry_after": rate["retry_after"]},
-                    status=429,
+                self.send_gateway_error(
+                    GatewayError(429, "rate_limit_exceeded", "Chat rate limit exceeded.", [f"Retry after {rate['retry_after']} seconds."]),
                     headers={
                         "Retry-After": str(rate["retry_after"]),
                         "X-RateLimit-Limit": str(rate["limit"]),
@@ -283,9 +458,12 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 )
                 return
             try:
-                body = self.read_json()
+                body = CHAT_SCHEMA.validate(self.read_json())
+            except GatewayError as exc:
+                self.send_gateway_error(exc)
+                return
             except ValueError as exc:
-                self.send_json({"error": str(exc)}, status=400)
+                self.send_gateway_error(GatewayError(400, "invalid_request", str(exc)))
                 return
 
             message = str(body.get("message", "")).strip()
@@ -297,16 +475,22 @@ class AIOSHandler(BaseHTTPRequestHandler):
             if not message:
                 self.send_error(400, "Message is required")
                 return
-            session = active_session(session_id or None)
+            try:
+                session = active_session(session_id or None, self.user_id)
+            except PermissionError:
+                self.send_gateway_error(GatewayError(403, "forbidden", "Session belongs to another user."))
+                return
             if not conversation_id:
-                conversation_id = STORE.create_conversation(session_id=session["id"])["id"]
+                conversation_id = STORE.create_conversation(session_id=session["id"], user_id=self.user_id)["id"]
+            elif not self.authorize_conversation(str(conversation_id)):
+                return
             try:
                 STORE.set_recovery_state(
                     conversation_id,
                     {"status": "running", "thread_id": thread_id or "main", "updated_at": utc_now()},
                 )
                 user_message = STORE.add_message(conversation_id, "user", message, thread_id=thread_id)
-                upsert_vector_records([vector_record_for_message(conversation_id, user_message)])
+                upsert_vector_records([vector_record_for_message(conversation_id, user_message, self.user_id)])
                 memory = STORE.update_short_term_memory(
                     conversation_id,
                     artifact_ids=artifact_ids,
@@ -333,7 +517,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     llm_messages,
                     artifact_ids=artifact_ids,
                     short_term_memory=memory,
-                    long_term_memory=STORE.get_long_term_memory(),
+                    long_term_memory=STORE.get_long_term_memory(self.user_id),
                     max_tokens=context_window_tokens,
                 )
                 context_token_count = count_message_tokens(llm_messages)
@@ -350,7 +534,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 assistant_text, provider = generate_response(llm_messages)
                 route = current_route()
                 assistant_message = STORE.add_message(conversation_id, "assistant", assistant_text, thread_id=thread_id)
-                upsert_vector_records([vector_record_for_message(conversation_id, assistant_message)])
+                upsert_vector_records([vector_record_for_message(conversation_id, assistant_message, self.user_id)])
                 memory = STORE.update_short_term_memory(conversation_id)
                 REDIS.set_temporary_memory(conversation_id, memory)
                 STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
@@ -370,7 +554,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
             except KeyError:
                 self.send_error(404, "Conversation not found")
             except LLMError as exc:
-                self.send_json({"error": str(exc)}, status=502)
+                self.send_gateway_error(GatewayError(502, "upstream_error", str(exc)))
             return
         self.send_error(404, "Not found")
 
@@ -400,6 +584,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
             document = document_metadata_for_upload(filename, item["content_type"], content, target)
             artifact = {
                 "id": artifact_id,
+                "user_id": self.user_id,
                 "filename": filename,
                 "content_type": item["content_type"],
                 "size": len(content),
@@ -439,6 +624,10 @@ class AIOSHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Request-Id", getattr(self, "request_id", ""))
+        self.send_header("X-API-Version", getattr(self, "api_version", "1"))
+        for name, value in getattr(self, "rate_headers", {}).items():
+            self.send_header(name, value)
         self.end_headers()
 
         try:
@@ -505,7 +694,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 {"type": "progress", "stage": "storage", "message": "Saving assistant reply"}
             )
             assistant_message = STORE.add_message(conversation_id, "assistant", assistant_text, thread_id=thread_id)
-            upsert_vector_records([vector_record_for_message(conversation_id, assistant_message)])
+            upsert_vector_records([vector_record_for_message(conversation_id, assistant_message, self.user_id)])
             memory = STORE.update_short_term_memory(conversation_id)
             REDIS.set_temporary_memory(conversation_id, memory)
             STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
@@ -516,8 +705,10 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     "message": {"role": "assistant", "content": assistant_text},
                 }
             )
+            self.record_analytics(200)
         except LLMError as exc:
             self.write_ndjson_event({"type": "error", "error": str(exc)})
+            self.record_analytics(502)
         except (BrokenPipeError, ConnectionResetError):
             assistant_text = "".join(assistant_parts).strip()
             if assistant_text:
@@ -529,6 +720,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 )
             STORE.set_recovery_state(conversation_id, {"status": "interrupted", "thread_id": thread_id})
             REDIS.set_stream_state(conversation_id, {"status": "interrupted", "session_id": session_id, "thread_id": thread_id})
+            self.record_analytics(499)
             return
 
     def serve_static(self, path: str) -> None:
@@ -551,6 +743,8 @@ class AIOSHandler(BaseHTTPRequestHandler):
         if not artifact:
             self.send_error(404, "Upload not found")
             return
+        if not self.authorize_resource(artifact):
+            return
 
         target = (ROOT / artifact["path"]).resolve()
         if UPLOAD_ROOT.resolve() not in target.parents:
@@ -563,8 +757,13 @@ class AIOSHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", artifact["content_type"])
         self.send_header("Content-Length", str(target.stat().st_size))
+        self.send_header("X-Request-Id", getattr(self, "request_id", ""))
+        self.send_header("X-API-Version", getattr(self, "api_version", "1"))
+        for name, value in getattr(self, "rate_headers", {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(target.read_bytes())
+        self.record_analytics(200)
 
     def read_json(self) -> dict[str, Any]:
         raw_length = self.headers.get("Content-Length", "0").strip()
@@ -574,6 +773,8 @@ class AIOSHandler(BaseHTTPRequestHandler):
             length = int(raw_length)
         except ValueError as exc:
             raise ValueError("Invalid Content-Length header") from exc
+        if length < 0 or length > MAX_API_BODY_BYTES:
+            raise ValueError(f"JSON request body exceeds the {MAX_API_BODY_BYTES}-byte limit")
         raw = self.rfile.read(length).decode("utf-8")
         return parse_json_body(raw)
 
@@ -581,17 +782,50 @@ class AIOSHandler(BaseHTTPRequestHandler):
         for key, value in parse_qsl(query, keep_blank_values=False):
             if key == "session_id" and value.strip():
                 return value.strip()
-        return self.headers.get("X-AIOS-Session-Id", "").strip()
+        header_session = self.headers.get("X-AIOS-Session-Id", "").strip()
+        if header_session:
+            return header_session
+        principal = getattr(self, "principal", None)
+        return principal.session_id if principal else ""
 
     def send_json(self, payload: dict[str, Any], status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        for name, value in (headers or {}).items():
+        response_headers = {
+            "X-Request-Id": getattr(self, "request_id", ""),
+            "X-API-Version": getattr(self, "api_version", "1"),
+            **getattr(self, "rate_headers", {}),
+            **(headers or {}),
+        }
+        for name, value in response_headers.items():
+            if not value:
+                continue
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+        self.record_analytics(status)
+
+    def record_analytics(self, status: int) -> None:
+        if getattr(self, "request_started", None) is not None:
+            try:
+                GATEWAY_STORE.record_event({
+                    "id": str(uuid4()), "event_name": "api_request", "event_category": "gateway",
+                    "request_id": self.request_id, "method": self.command,
+                    "path": normalize_api_path(urlparse(self.path).path)[0], "api_version": self.api_version,
+                    "status_code": status, "duration_ms": round((time.perf_counter() - self.request_started) * 1000, 3),
+                    "user_id": self.user_id, "session_id": self.principal.session_id if self.principal else None,
+                })
+            except (OSError, ValueError):
+                pass
+
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+        if urlparse(self.path).path.startswith("/api"):
+            labels = {400: "bad_request", 401: "authentication_required", 403: "forbidden", 404: "not_found", 429: "rate_limit_exceeded", 502: "upstream_error"}
+            self.send_gateway_error(GatewayError(code, labels.get(code, "api_error"), message or "Request failed."))
+            return
+        super().send_error(code, message, explain)
 
     def write_ndjson_event(self, payload: dict[str, Any]) -> None:
         self.wfile.write(serialize_ndjson_event(payload))
@@ -615,9 +849,13 @@ def compact_conversations(conversations: list[dict[str, Any]]) -> list[dict[str,
     ]
 
 
-def active_session(session_id: str | None = None) -> dict[str, Any]:
+def active_session(session_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
     cached = REDIS.get_active_session(session_id) if session_id else None
-    session = cached or STORE.get_or_create_session(session_id)
+    if cached and user_id and cached.get("user_id") not in {None, user_id}:
+        raise PermissionError("Session belongs to another user")
+    session = cached or STORE.get_or_create_session(session_id, user_id=user_id)
+    if user_id and not session.get("user_id"):
+        session = STORE.get_or_create_session(session["id"], user_id=user_id)
     REDIS.set_active_session(session["id"], session)
     return session
 
@@ -704,7 +942,7 @@ def context_sections(
         {"name": "short_term_memory", "priority": 90, "text": short_term_memory_context_text(short_term_memory or {})},
         {"name": "long_term_memory", "priority": 89, "text": long_term_memory_context_text(long_term_memory or {})},
         {"name": "user_preferences", "priority": 88, "text": user_preferences_context_text(session)},
-        {"name": "retrieved_context", "priority": 86, "text": retrieved_context_text(retrieval_query)},
+        {"name": "retrieved_context", "priority": 86, "text": retrieved_context_text(retrieval_query, user_id=str(session.get("user_id") or "") or None)},
         {"name": "uploaded_files", "priority": 82, "text": uploaded_files_context_text(artifact_ids)},
         {"name": "open_files", "priority": 80, "text": open_files_context_text(session)},
         {"name": "git_status", "priority": 72, "text": git_status_context_text()},
@@ -1287,6 +1525,7 @@ def vector_records_for_artifact(artifact: dict[str, Any]) -> list[dict[str, Any]
             {
                 "id": record_id,
                 "source_type": source_type,
+                "user_id": artifact.get("user_id"),
                 "artifact_id": artifact["id"],
                 "chunk_id": chunk_id,
                 "chunk_index": int(chunk.get("index", len(records))),
@@ -1310,12 +1549,15 @@ def vector_records_for_artifact(artifact: dict[str, Any]) -> list[dict[str, Any]
     return records
 
 
-def vector_record_for_message(conversation_id: str, message: dict[str, Any]) -> dict[str, Any]:
+def vector_record_for_message(
+    conversation_id: str, message: dict[str, Any], user_id: str | None = None
+) -> dict[str, Any]:
     text = str(message.get("content") or "").strip()
     message_id = str(message.get("id") or uuid4())
     return {
         "id": f"conversation:{conversation_id}:{message_id}",
         "source_type": "conversation",
+        "user_id": user_id,
         "source_id": conversation_id,
         "conversation_id": conversation_id,
         "message_id": message_id,
@@ -1336,7 +1578,7 @@ def vector_record_for_message(conversation_id: str, message: dict[str, Any]) -> 
 
 def index_conversation_history(conversations: list[dict[str, Any]]) -> None:
     records = [
-        vector_record_for_message(str(conversation.get("id") or "unknown"), message)
+        vector_record_for_message(str(conversation.get("id") or "unknown"), message, conversation.get("user_id"))
         for conversation in conversations
         for message in conversation.get("messages", [])
         if message.get("role") in {"user", "assistant"} and str(message.get("content") or "").strip()
@@ -1344,7 +1586,7 @@ def index_conversation_history(conversations: list[dict[str, Any]]) -> None:
     upsert_vector_records(records)
 
 
-def vector_records_for_long_term_memory(memory: dict[str, Any]) -> list[dict[str, Any]]:
+def vector_records_for_long_term_memory(memory: dict[str, Any], user_id: str | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     fields = ("coding_style", "projects", "commands", "learned_behavior")
     for field in fields:
@@ -1353,9 +1595,10 @@ def vector_records_for_long_term_memory(memory: dict[str, Any]) -> list[dict[str
             text = json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, dict) else str(value)
             if not text.strip():
                 continue
-            digest = hashlib.sha256(f"{field}:{text}".encode("utf-8")).hexdigest()[:16]
+            owner_key = user_id or "local"
+            digest = hashlib.sha256(f"{owner_key}:{field}:{text}".encode("utf-8")).hexdigest()[:16]
             records.append({
-                "id": f"memory:{field}:{digest}", "source_type": "memory", "source_id": field,
+                "id": f"memory:{owner_key}:{field}:{digest}", "source_type": "memory", "source_id": field, "user_id": user_id,
                 "filename": "long-term-memory", "document_type": field, "text": text,
                 "embedding": generate_embedding(text), "embedding_model": EMBEDDING_MODEL,
                 "embedding_dimensions": EMBEDDING_DIMENSIONS,
@@ -1365,7 +1608,7 @@ def vector_records_for_long_term_memory(memory: dict[str, Any]) -> list[dict[str
     if isinstance(preferences, dict) and preferences:
         text = json.dumps(preferences, ensure_ascii=False, default=str)
         records.append({
-            "id": "memory:user_preferences", "source_type": "memory", "source_id": "user_preferences",
+            "id": f"memory:{user_id or 'local'}:user_preferences", "source_type": "memory", "source_id": "user_preferences", "user_id": user_id,
             "filename": "long-term-memory", "document_type": "user_preferences", "text": text,
             "embedding": generate_embedding(text), "embedding_model": EMBEDDING_MODEL,
             "embedding_dimensions": EMBEDDING_DIMENSIONS,
@@ -1374,8 +1617,12 @@ def vector_records_for_long_term_memory(memory: dict[str, Any]) -> list[dict[str
     return records
 
 
-def index_long_term_memory(memory: dict[str, Any]) -> None:
-    replace_vector_source("memory", vector_records_for_long_term_memory(memory))
+def index_long_term_memory(memory: dict[str, Any], user_id: str | None = None) -> None:
+    records = vector_records_for_long_term_memory(memory, user_id)
+    if user_id:
+        upsert_vector_records(records)
+    else:
+        replace_vector_source("memory", records)
 
 
 def load_vector_records() -> list[dict[str, Any]]:
@@ -1403,9 +1650,9 @@ def active_vector_store():
 
 
 def semantic_search(
-    query: str, top_k: int = 8, source_types: list[str] | None = None,
+    query: str, top_k: int = 8, source_types: list[str] | None = None, user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    return hybrid_retrieve(query, top_k=top_k, source_types=source_types)
+    return hybrid_retrieve(query, top_k=top_k, source_types=source_types, user_id=user_id)
 
 
 def conversation_search_text(conversation: dict[str, Any], limit: int = 8000) -> str:
@@ -1448,8 +1695,10 @@ def related_conversations(
     return sorted(grouped.values(), key=lambda item: item["score"], reverse=True)[:max(1, top_k)]
 
 
-def similar_documents(artifact_id: str, top_k: int = 5) -> list[dict[str, Any]]:
+def similar_documents(artifact_id: str, top_k: int = 5, user_id: str | None = None) -> list[dict[str, Any]]:
     records = load_vector_records()
+    if user_id:
+        records = [record for record in records if record.get("user_id") == user_id]
     target = [record for record in records if record.get("artifact_id") == artifact_id]
     if not target:
         return []
@@ -1491,7 +1740,9 @@ def similar_documents(artifact_id: str, top_k: int = 5) -> list[dict[str, Any]]:
     return sorted(results, key=lambda item: item["score"], reverse=True)[:max(1, top_k)]
 
 
-def hybrid_retrieve(query: str, top_k: int = 8, source_types: list[str] | None = None) -> list[dict[str, Any]]:
+def hybrid_retrieve(
+    query: str, top_k: int = 8, source_types: list[str] | None = None, user_id: str | None = None
+) -> list[dict[str, Any]]:
     query = clean_extracted_text(query)
     if not query:
         return []
@@ -1501,6 +1752,8 @@ def hybrid_retrieve(query: str, top_k: int = 8, source_types: list[str] | None =
     allowed_sources = {item.strip().lower() for item in (source_types or []) if item.strip()}
     candidates: list[dict[str, Any]] = []
     for record in load_vector_records():
+        if user_id and record.get("user_id") != user_id:
+            continue
         source_type = str(record.get("source_type") or "document").lower()
         if allowed_sources and source_type not in allowed_sources:
             continue
@@ -1587,10 +1840,10 @@ def add_citations_to_results(results: list[dict[str, Any]]) -> list[dict[str, An
     return cited
 
 
-def retrieved_context_text(query: str, top_k: int = RAG_TOP_K) -> str:
+def retrieved_context_text(query: str, top_k: int = RAG_TOP_K, user_id: str | None = None) -> str:
     if not query.strip():
         return ""
-    results = add_citations_to_results(hybrid_retrieve(query, top_k=top_k))
+    results = add_citations_to_results(hybrid_retrieve(query, top_k=top_k, user_id=user_id))
     if not results:
         return ""
     lines = [

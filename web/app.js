@@ -25,6 +25,8 @@ const dropZone = document.querySelector("#drop-zone");
 const attachmentCount = document.querySelector("#attachment-count");
 const artifactList = document.querySelector("#artifact-list");
 const refreshArtifacts = document.querySelector("#refresh-artifacts");
+const refreshObservability = document.querySelector("#refresh-observability");
+const observabilityDashboard = document.querySelector("#observability-dashboard");
 const providerMode = document.querySelector("#provider-mode");
 const contextWindow = document.querySelector("#context-window");
 const compactMode = document.querySelector("#compact-mode");
@@ -94,6 +96,7 @@ if (dropZone) {
 }
 
 refreshArtifacts.addEventListener("click", loadArtifacts);
+refreshObservability?.addEventListener("click", loadObservability);
 newThread.addEventListener("click", createThread);
 threadSelect.addEventListener("change", () => {
   setActiveThread(threadSelect.value || "main");
@@ -203,7 +206,7 @@ form.addEventListener("submit", async (event) => {
       await loadArtifacts();
     }
     const enrichedContent = buildChatContent(content, uploadedArtifacts);
-    const response = await fetch("/api/chat", {
+    const response = await authenticatedFetch("/api/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -264,7 +267,7 @@ async function loadConversations() {
   // Recent chat history is account-wide for this local single-user app. Sessions
   // scope working context, but must not hide persisted conversations after a
   // browser restart, local-storage reset, or migration from pre-session data.
-  const response = await fetch("/api/conversations");
+  const response = await authenticatedFetch("/api/v1/conversations");
   const payload = await response.json();
   const conversations = payload.conversations || [];
   conversationList.innerHTML = "";
@@ -280,7 +283,7 @@ async function loadConversations() {
 }
 
 async function openConversation(id) {
-  const response = await fetch(`/api/conversations/${id}`);
+  const response = await authenticatedFetch(`/api/v1/conversations/${id}`);
   if (!response.ok) {
     setActiveConversation(null);
     throw new Error("Conversation not found.");
@@ -471,7 +474,15 @@ function escapeHtml(value) {
 }
 
 function shortError(value) {
-  return value.length > 700 ? `${value.slice(0, 700)}...` : value;
+  const message = typeof value === "string" ? value : value?.message || JSON.stringify(value);
+  return message.length > 700 ? `${message.slice(0, 700)}...` : message;
+}
+
+function authenticatedFetch(url, options = {}) {
+  const token = localStorage.getItem("aios-access-token") || "";
+  const headers = { ...(options.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return window.fetch(url, { ...options, headers });
 }
 
 function addSelectedFiles(files) {
@@ -493,10 +504,10 @@ function fileSummary(files) {
 async function uploadFiles(files) {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
-  const response = await fetch("/api/uploads", { method: "POST", body: formData });
+  const response = await authenticatedFetch("/api/v1/uploads", { method: "POST", body: formData });
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload.error || "Upload failed.");
+    throw new Error(shortError(payload.error || "Upload failed."));
   }
   return payload.artifacts || [];
 }
@@ -527,14 +538,43 @@ function buildChatContent(content, artifacts) {
 }
 
 async function loadArtifacts() {
-  const response = await fetch("/api/uploads");
+  const response = await authenticatedFetch("/api/v1/uploads");
   const payload = await response.json();
   renderArtifacts(payload.artifacts || []);
 }
 
+async function loadObservability() {
+  if (!observabilityDashboard) return;
+  try {
+    const response = await authenticatedFetch("/api/v1/observability");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(shortError(payload.error || "Observability unavailable."));
+    const data = payload.observability || {};
+    const resources = data.resources || {};
+    const queues = data.queues?.totals || {};
+    const gpu = data.gpu?.available ? `${data.gpu.gpus.length} GPU` : "Not detected";
+    const metrics = [
+      ["Status", data.status || "unknown", `status-${data.status || "degraded"}`],
+      ["API p95", `${Number(data.api?.p95_latency_ms || 0).toFixed(1)} ms`, ""],
+      ["Tokens", Number(data.tokens?.total || 0).toLocaleString(), ""],
+      ["Estimated cost", `$${Number(data.cost?.estimated_usd || 0).toFixed(4)}`, ""],
+      ["Model success", `${(Number(data.models?.success_rate || 0) * 100).toFixed(1)}%`, ""],
+      ["Tool success", `${(Number(data.tools?.success_rate || 0) * 100).toFixed(1)}%`, ""],
+      ["CPU", resources.available ? `${Number(resources.cpu_percent || 0).toFixed(1)}%` : "Unavailable", ""],
+      ["Memory", resources.available ? `${Number(resources.memory_percent || 0).toFixed(1)}%` : "Unavailable", ""],
+      ["GPU", gpu, ""],
+      ["Queue pending", Number(queues.pending || 0).toLocaleString(), ""],
+      ["Errors", Number(data.errors?.count || 0).toLocaleString(), ""],
+      ["Users", Number(data.users?.unique_users || 0).toLocaleString(), ""],
+    ];
+    observabilityDashboard.innerHTML = metrics.map(([label, value, className]) => `<div class="metric-card ${className}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`).join("");
+  } catch (error) {
+    observabilityDashboard.innerHTML = `<div class="metric-card status-degraded"><small>Observability</small><strong>${escapeHtml(shortError(error))}</strong></div>`;
+  }
+}
 async function ensureSession() {
   const query = activeSessionId ? `?session_id=${encodeURIComponent(activeSessionId)}` : "";
-  const response = await fetch(`/api/session${query}`);
+  const response = await authenticatedFetch(`/api/v1/session${query}`);
   const payload = await response.json();
   if (payload.session && payload.session.id) {
     setActiveSession(payload.session.id);
@@ -583,14 +623,14 @@ async function createThread() {
     notify("No conversation", "Start or open a conversation before creating a thread.");
     return;
   }
-  const response = await fetch(`/api/conversations/${activeConversationId}/threads`, {
+  const response = await authenticatedFetch(`/api/v1/conversations/${activeConversationId}/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: `Thread ${new Date().toLocaleTimeString()}` }),
   });
   const thread = await response.json();
   if (!response.ok) {
-    notify("Thread error", thread.error || "Could not create thread.");
+    notify("Thread error", shortError(thread.error || "Could not create thread."));
     return;
   }
   setActiveThread(thread.id);
@@ -740,7 +780,7 @@ async function syncSessionContext() {
   }
   const workspace = loadJson("aios-workspace", {});
   try {
-    const response = await fetch("/api/session", {
+    const response = await authenticatedFetch("/api/v1/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

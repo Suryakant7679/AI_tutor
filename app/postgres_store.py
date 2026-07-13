@@ -37,7 +37,7 @@ class PostgreSQLConversationStore(ConversationStore):
             with connection.cursor(row_factory=dict_row) as cursor:
                 cursor.execute(
                     """
-                    SELECT id, active_project, current_workspace, running_task, active_file,
+                    SELECT id, user_id, active_project, current_workspace, running_task, active_file,
                            open_files, active_tool, terminal_output, browser_results, mcp_outputs,
                            developer_instructions, user_preferences, created_at, updated_at
                     FROM sessions ORDER BY updated_at DESC
@@ -46,17 +46,19 @@ class PostgreSQLConversationStore(ConversationStore):
                 sessions = [self._session_from_row(row) for row in cursor.fetchall()]
                 cursor.execute(
                     """
-                    SELECT id, session_id, title, active_thread_id, threads, messages, summary,
+                    SELECT id, user_id, session_id, title, active_thread_id, threads, messages, summary,
                            compressed_message_count, recovery_state, short_term_memory,
                            created_at, updated_at
                     FROM chats ORDER BY updated_at DESC
                     """
                 )
                 conversations = [self._chat_from_row(row) for row in cursor.fetchall()]
+        memory_state = self._load_memory_state()
         return {
             "sessions": sessions,
             "conversations": conversations,
-            "long_term_memory": self._load_memory(),
+            "long_term_memory": memory_state["long_term_memory"],
+            "user_long_term_memories": memory_state["user_long_term_memories"],
         }
 
     def _save(self, payload: dict[str, Any]) -> None:
@@ -68,13 +70,14 @@ class PostgreSQLConversationStore(ConversationStore):
                     cursor.execute(
                         """
                         INSERT INTO sessions (
-                            id, active_project, current_workspace, running_task, active_file,
+                            id, user_id, active_project, current_workspace, running_task, active_file,
                             open_files, active_tool, terminal_output, browser_results, mcp_outputs,
                             developer_instructions, user_preferences, created_at, updated_at
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (id) DO UPDATE SET
+                            user_id = COALESCE(sessions.user_id, EXCLUDED.user_id),
                             active_project = EXCLUDED.active_project,
                             current_workspace = EXCLUDED.current_workspace,
                             running_task = EXCLUDED.running_task,
@@ -89,7 +92,7 @@ class PostgreSQLConversationStore(ConversationStore):
                             updated_at = EXCLUDED.updated_at
                         """,
                         (
-                            session["id"], session.get("active_project", ""),
+                            session["id"], session.get("user_id"), session.get("active_project", ""),
                             Jsonb(session.get("current_workspace", {})), session.get("running_task", ""),
                             session.get("active_file", ""), Jsonb(session.get("open_files", [])),
                             session.get("active_tool", ""), session.get("terminal_output", ""),
@@ -102,11 +105,12 @@ class PostgreSQLConversationStore(ConversationStore):
                     cursor.execute(
                         """
                         INSERT INTO chats (
-                            id, session_id, title, active_thread_id, threads, messages, summary,
+                            id, user_id, session_id, title, active_thread_id, threads, messages, summary,
                             compressed_message_count, recovery_state, short_term_memory,
                             created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO UPDATE SET
+                            user_id = COALESCE(chats.user_id, EXCLUDED.user_id),
                             session_id = EXCLUDED.session_id,
                             title = EXCLUDED.title,
                             active_thread_id = EXCLUDED.active_thread_id,
@@ -119,7 +123,7 @@ class PostgreSQLConversationStore(ConversationStore):
                             updated_at = EXCLUDED.updated_at
                         """,
                         (
-                            chat["id"], chat.get("session_id"), chat.get("title", "New chat"),
+                            chat["id"], chat.get("user_id"), chat.get("session_id"), chat.get("title", "New chat"),
                             chat.get("active_thread_id", "main"), Jsonb(chat.get("threads", [])),
                             Jsonb(chat.get("messages", [])), chat.get("summary", ""),
                             chat.get("compressed_message_count", 0), Jsonb(chat.get("recovery_state", {})),
@@ -127,18 +131,34 @@ class PostgreSQLConversationStore(ConversationStore):
                         ),
                     )
             connection.commit()
-        self._save_memory(payload.get("long_term_memory"))
+        self._save_memory_state(payload.get("long_term_memory"), payload.get("user_long_term_memories"))
 
-    def _load_memory(self) -> dict[str, Any]:
+    def _load_memory_state(self) -> dict[str, Any]:
         if not self.path.exists():
-            return default_long_term_memory()
+            return {"long_term_memory": default_long_term_memory(), "user_long_term_memories": {}}
         try:
-            return normalize_long_term_memory(json.loads(self.path.read_text(encoding="utf-8")))
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if "long_term_memory" in payload or "user_long_term_memories" in payload:
+                return {
+                    "long_term_memory": normalize_long_term_memory(payload.get("long_term_memory")),
+                    "user_long_term_memories": {
+                        str(key): normalize_long_term_memory(value)
+                        for key, value in (payload.get("user_long_term_memories") or {}).items()
+                    },
+                }
+            return {"long_term_memory": normalize_long_term_memory(payload), "user_long_term_memories": {}}
         except (OSError, json.JSONDecodeError):
-            return default_long_term_memory()
+            return {"long_term_memory": default_long_term_memory(), "user_long_term_memories": {}}
 
-    def _save_memory(self, memory: Any) -> None:
-        self.path.write_text(json.dumps(normalize_long_term_memory(memory), indent=2), encoding="utf-8")
+    def _save_memory_state(self, memory: Any, user_memories: Any) -> None:
+        payload = {
+            "long_term_memory": normalize_long_term_memory(memory),
+            "user_long_term_memories": {
+                str(key): normalize_long_term_memory(value)
+                for key, value in (user_memories or {}).items()
+            },
+        }
+        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     @staticmethod
     def _value(value: Any) -> Any:
@@ -148,11 +168,13 @@ class PostgreSQLConversationStore(ConversationStore):
     def _session_from_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         session = {key: cls._value(value) for key, value in row.items()}
         session["id"] = str(session["id"])
+        session["user_id"] = str(session["user_id"]) if session.get("user_id") else None
         return session
 
     @classmethod
     def _chat_from_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         chat = {key: cls._value(value) for key, value in row.items()}
         chat["id"] = str(chat["id"])
+        chat["user_id"] = str(chat["user_id"]) if chat.get("user_id") else None
         chat["session_id"] = str(chat["session_id"]) if chat.get("session_id") else None
         return chat

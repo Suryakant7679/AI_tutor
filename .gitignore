@@ -12,3 +12,6 @@ data/*.json
 !data/.gitkeep
 data/uploads/
 data/qdrant/
+
+data/backups/
+data/worker_state/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,7 @@ from app.mcp.python_tools import run_restricted_python
 from app.mcp.redis_tools import RedisReader
 from app.mcp.sqlite_tools import SQLiteReader
 from app.mcp.terminal_tools import run_terminal
+from app.observability import OBSERVABILITY
 
 
 def agent_result(agent: str, status: str, output: Any = None, message: str = "") -> dict[str, Any]:
@@ -349,7 +351,11 @@ class SpecialistAgentRegistry:
         agent = self.agents.get(name)
         if agent is None:
             raise KeyError(f"Unknown specialist agent: {name}")
+        started = time.perf_counter()
         try:
-            return agent.execute(objective, dict(payload or {}), dict(context or {}))
+            result = agent.execute(objective, dict(payload or {}), dict(context or {}))
         except (OSError, RuntimeError, ValueError, PermissionError, FileNotFoundError, KeyError) as exc:
-            return agent_result(name, "failed", None, str(exc))
+            result = agent_result(name, "failed", None, str(exc))
+        success = result.get("status") != "failed"
+        OBSERVABILITY.record("tool", name, success=success, duration_ms=(time.perf_counter() - started) * 1000, error="" if success else str(result.get("summary") or "Agent execution failed"), properties={"objective_length": len(objective)})
+        return result

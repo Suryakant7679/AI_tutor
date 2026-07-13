@@ -57,6 +57,27 @@ Health check:
 http://127.0.0.1:8000/api/health
 ```
 
+## API authentication and versioning
+
+Version 1 routes use `/api/v1`; existing `/api` routes remain compatible aliases.
+Local development leaves authentication optional. To protect all non-public API
+routes, configure and restart:
+
+```text
+AIOS_AUTH_REQUIRED=true
+AIOS_JWT_SECRET=replace_with_a_random_secret_of_at_least_32_bytes
+AIOS_ADMIN_EMAILS=admin@example.com
+```
+
+Register through `POST /api/v1/auth/register` with `email`, `password`, and an
+optional `display_name`, or sign in through `POST /api/v1/auth/login`. Send the
+returned token on protected requests as `Authorization: Bearer <token>`. User
+records, password hashes, the development signing secret, request analytics,
+and login sessions persist across restarts. Configure `AIOS_API_RATE_LIMIT` and
+`AIOS_API_RATE_WINDOW` to adjust gateway throttling.
+PostgreSQL mode writes identities and events to the `users` and `analytics`
+tables; JSON mode uses `AIOS_GATEWAY_DATA_FILE`.
+
 ## Current Features
 
 - Simple chat UI.
@@ -115,6 +136,72 @@ Temporary conversation memory expires after `AIOS_REDIS_MEMORY_TTL` seconds.
 Chat requests use an atomic fixed-window rate limit configured by
 `AIOS_CHAT_RATE_LIMIT` requests per `AIOS_CHAT_RATE_WINDOW` seconds. When Redis
 is unavailable, rate limiting fails open so local development remains usable.
+
+## Background workers
+
+Checkpoint 14 uses Redis queues. Start one worker process for all queue
+consumers and a second process for scheduled job production:
+
+```powershell
+python -m app.workers --worker all
+```
+
+```powershell
+python -m app.workers --worker scheduler
+```
+
+Use separate terminals and keep both processes running. Add `--once` to a
+command for a non-blocking single pass. For production, individual consumers
+can be scaled independently with `--worker pdf`, `ocr`, `embedding`, `memory`,
+`summary`, `git`, `files`, `cache`, `analytics`, `health`, `email`, `backup`, or
+`vector`. A reachable `REDIS_URL` is required.
+
+The queues and payloads are:
+
+- `pdf-processing`: `{"artifact_id": "..."}`; embedded text proceeds to embeddings and scanned PDFs proceed to OCR.
+- `ocr`: `{"artifact_id": "..."}`; images and configured scanned-PDF OCR.
+- `embedding-generation`: an `artifact_id`, a `conversation_id`, or `{"target": "memory", "user_id": "..."}`.
+- `memory-compression`: `{"conversation_id": "...", "recent_limit": 6, "text_limit": 2000}`.
+- `conversation-summary`: `{"conversation_id": "...", "keep_recent": 6}`.
+- `git-monitoring` and `file-monitoring`: detect repository/workspace changes and queue code-vector refreshes.
+- `cache-cleanup`: removes orphaned Redis queue references; Redis expires cache values by TTL.
+- `analytics`: aggregates gateway events into `data/worker_state/analytics-summary.json`.
+- `health-check`: records Redis, conversation-store, vector-store, and upload-storage health.
+- `email-notifications`: sends explicit notification jobs through configured SMTP.
+- `backup`: archives local `data` files under `data/backups` with retention cleanup; `.env` and existing backups are excluded.
+- `vector-index-update`: rebuilds selected document, code, conversation, and memory sources.
+
+The scheduler persists last-run timestamps under `data/worker_state` so restarts
+do not duplicate interval jobs. Configure intervals with
+`AIOS_SCHEDULE_<NAME>_SECONDS`; set an interval to `0` to disable it. Email is
+opt-in: leave `AIOS_HEALTH_ALERT_EMAIL` and SMTP settings blank to run without
+notifications. Configure PDF/OCR extraction with `AIOS_PDF_TEXT_COMMAND`,
+`AIOS_OCR_COMMAND`, and `AIOS_PDF_OCR_COMMAND`.
+
+## Observability
+
+Checkpoint 15 combines gateway analytics, the LLM usage ledger, tool/worker
+events, Redis queue depths, scheduled health snapshots, and live resource
+sampling. Open the workspace tools panel and use **System health**, or request:
+
+```text
+GET /api/v1/observability
+```
+
+When authentication is required, this endpoint is restricted to users with the
+`admin` role. The dashboard reports token totals, estimated provider cost, API
+average/p95/max latency, model and tool success rates, recent errors, unique
+users, CPU and RAM utilization, NVIDIA GPU utilization when `nvidia-smi` is
+available, Redis queue depths, and worker health. Systems without an NVIDIA GPU
+report GPU monitoring as unavailable rather than unhealthy.
+
+Metrics events are retained in `AIOS_OBSERVABILITY_FILE` (default
+`data/observability.json`) up to `AIOS_OBSERVABILITY_MAX_EVENTS` records.
+Provider cost remains an estimate and requires the configured
+`AIOS_<PROVIDER>_INPUT_COST_PER_MILLION` and
+`AIOS_<PROVIDER>_OUTPUT_COST_PER_MILLION` rates. Run
+`python -m pip install -r requirements.txt` after pulling changes so `psutil`
+is available for CPU and memory metrics.
 
 ## Qdrant vector storage
 

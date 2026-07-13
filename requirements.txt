@@ -1,5 +1,6 @@
 psycopg[binary]>=3.2,<4
 redis>=5,<8
+psutil>=5.9,<8
 qdrant-client>=1.14,<2
 mcp>=1.27,<2
 Pillow>=10,<13

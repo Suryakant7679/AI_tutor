@@ -535,6 +535,41 @@ body.tools-open .tool-panel {
   font-size: 14px;
 }
 
+.observability-dashboard {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px;
+  background: var(--panel);
+}
+
+.metric-card strong,
+.metric-card small {
+  display: block;
+}
+
+.metric-card strong {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.metric-card small {
+  color: var(--muted);
+}
+
+.metric-card.status-ok strong {
+  color: #22c55e;
+}
+
+.metric-card.status-degraded strong {
+  color: var(--danger);
+}
 .artifact-list,
 .notification-list {
   display: flex;

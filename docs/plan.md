@@ -87,14 +87,14 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 - [x] Basic logging through server log output
 - [x] Basic error handling
 - [x] Streaming response support
-- [ ] Authentication
-- [ ] Authorization
-- [ ] JWT verification
-- [ ] Rate limiting
-- [ ] Structured request and response schemas
-- [ ] Analytics events
-- [ ] API versioning
-- [ ] Durable session creation
+- [x] Authentication
+- [x] Authorization
+- [x] JWT verification
+- [x] Rate limiting
+- [x] Structured request and response schemas
+- [x] Analytics events
+- [x] API versioning
+- [x] Durable session creation
 
 ## Checkpoint 6: Session And Conversation Management
 
@@ -246,36 +246,36 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 
 ## Checkpoint 14: Background Workers
 
-- [ ] PDF processing worker
-- [ ] OCR worker
-- [ ] Embedding generation worker
-- [ ] Memory compression worker
-- [ ] Conversation summary worker
-- [ ] Git monitoring worker
-- [ ] File monitoring worker
-- [ ] Cache cleanup worker
-- [ ] Analytics worker
-- [ ] Health check worker
-- [ ] Scheduled jobs
-- [ ] Email notifications
-- [ ] Backup worker
-- [ ] Vector index update worker
+- [x] PDF processing worker
+- [x] OCR worker
+- [x] Embedding generation worker
+- [x] Memory compression worker
+- [x] Conversation summary worker
+- [x] Git monitoring worker
+- [x] File monitoring worker
+- [x] Cache cleanup worker
+- [x] Analytics worker
+- [x] Health check worker
+- [x] Scheduled jobs
+- [x] Email notifications
+- [x] Backup worker
+- [x] Vector index update worker
 
 ## Checkpoint 15: Observability
 
 - [x] Basic local server logs
-- [ ] Token usage monitoring
-- [ ] API latency monitoring
-- [ ] Model performance monitoring
-- [ ] Tool success rate monitoring
-- [ ] Error tracking
-- [ ] User analytics
-- [ ] Memory usage monitoring
-- [ ] GPU usage monitoring
-- [ ] CPU usage monitoring
-- [ ] Queue status monitoring
-- [ ] Cost tracking
-- [ ] System health dashboard
+- [x] Token usage monitoring
+- [x] API latency monitoring
+- [x] Model performance monitoring
+- [x] Tool success rate monitoring
+- [x] Error tracking
+- [x] User analytics
+- [x] Memory usage monitoring
+- [x] GPU usage monitoring
+- [x] CPU usage monitoring
+- [x] Queue status monitoring
+- [x] Cost tracking
+- [x] System health dashboard
 
 ## Checkpoint 16: Deployment
 
@@ -283,6 +283,6 @@ This roadmap is based on the architecture in `readme.md` and the features alread
 - [ ] Docker Compose for PostgreSQL, Redis, Qdrant, workers, scheduler, and monitoring
 - [ ] Nginx reverse proxy
 - [ ] HTTPS setup
-- [ ] Cloudflare Tunnel or custom domain
+- [ ] Cloudflare Tunnel
 - [ ] Production environment configuration
 - [ ] Backup and restore process

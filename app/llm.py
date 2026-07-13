@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.model_router import EnvironmentModelRouter, ModelRoute
+from app.observability import OBSERVABILITY
 from app.usage import UsageTracker
 from app.validation import ValidationError, ValidationManager, validation_context
 
@@ -48,23 +49,28 @@ def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
 
 
 def generate_response_stream(messages: list[dict[str, str]]) -> tuple[Iterator[str], str]:
-    chunks, route = generate_with_router(messages, stream=True)
-    assert not isinstance(chunks, str)
-    output = "".join(chunks).strip()
-    USAGE.record(route.provider, route.model, route.task, messages, output)
-    active_route = [route]
-
-    def retry(feedback: str) -> str:
-        retry_messages = [*messages, {"role": "system", "content": feedback}]
-        corrected, retry_route = _generate_response_once(retry_messages)
-        active_route[0] = retry_route
-        return corrected
-
+    started = time.perf_counter()
+    route: ModelRoute | None = None
     try:
+        chunks, route = generate_with_router(messages, stream=True)
+        assert not isinstance(chunks, str)
+        output = "".join(chunks).strip()
+        USAGE.record(route.provider, route.model, route.task, messages, output)
+        active_route = [route]
+
+        def retry(feedback: str) -> str:
+            retry_messages = [*messages, {"role": "system", "content": feedback}]
+            corrected, retry_route = _generate_response_once(retry_messages)
+            active_route[0] = retry_route
+            return corrected
+
         validated = VALIDATION.process(output, validation_context(messages), retry=retry)
-    except ValidationError as exc:
+        final_route = active_route[0]
+        OBSERVABILITY.record("model", f"{final_route.provider}/{final_route.model}", duration_ms=(time.perf_counter() - started) * 1000, properties={"task": final_route.task, "stream": True})
+        return iter((validated,)), final_route.provider
+    except (ValidationError, LLMError) as exc:
+        OBSERVABILITY.record("model", f"{route.provider}/{route.model}" if route else "unrouted", success=False, duration_ms=(time.perf_counter() - started) * 1000, error=str(exc), properties={"task": route.task if route else "unknown", "stream": True})
         raise LLMError(str(exc)) from exc
-    return iter((validated,)), active_route[0].provider
 
 
 def _generate_response_once(messages: list[dict[str, str]]) -> tuple[str, ModelRoute]:
@@ -84,13 +90,17 @@ def generate_with_router(
     errors: list[str] = []
     for route in routes:
         _ROUTE_STATE.active = route
+        started = time.perf_counter()
         try:
             if route.provider in {"openai", "groq", "deepseek"}:
                 result = chat_completions_stream(route.provider, messages) if stream else chat_completions(route.provider, messages)
             else:
                 result = gemini_stream(messages) if stream else gemini(messages)
+            if not stream:
+                OBSERVABILITY.record("model", f"{route.provider}/{route.model}", duration_ms=(time.perf_counter() - started) * 1000, properties={"task": route.task, "stream": False})
             return result, route
         except LLMError as exc:
+            OBSERVABILITY.record("model", f"{route.provider}/{route.model}", success=False, duration_ms=(time.perf_counter() - started) * 1000, error=str(exc), properties={"task": route.task, "stream": stream})
             errors.append(f"{route.provider}: {exc}")
     if errors:
         raise LLMError("All configured providers failed. " + " | ".join(errors))

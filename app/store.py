@@ -22,8 +22,14 @@ class ConversationStore:
             if conversation.get("session_id") == session_id
         ]
 
-    def get_long_term_memory(self) -> dict[str, Any]:
-        return normalize_long_term_memory(self._load().get("long_term_memory"))
+    def list_conversations_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        return [item for item in self._load()["conversations"] if item.get("user_id") == user_id]
+
+    def get_long_term_memory(self, user_id: str | None = None) -> dict[str, Any]:
+        payload = self._load()
+        if user_id:
+            return normalize_long_term_memory(payload.get("user_long_term_memories", {}).get(user_id))
+        return normalize_long_term_memory(payload.get("long_term_memory"))
 
     def update_long_term_memory(
         self,
@@ -32,27 +38,37 @@ class ConversationStore:
         projects: list[dict[str, Any] | str] | None = None,
         commands: list[str] | None = None,
         learned_behavior: list[str] | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         payload = self._load()
+        source = payload.get("user_long_term_memories", {}).get(user_id) if user_id else payload.get("long_term_memory")
         memory = merge_long_term_memory(
-            payload.get("long_term_memory"), user_preferences, coding_style,
+            source, user_preferences, coding_style,
             projects, commands, learned_behavior,
         )
-        payload["long_term_memory"] = memory
+        if user_id:
+            payload.setdefault("user_long_term_memories", {})[user_id] = memory
+        else:
+            payload["long_term_memory"] = memory
         self._save(payload)
         return memory
 
-    def get_or_create_session(self, session_id: str | None = None) -> dict[str, Any]:
+    def get_or_create_session(self, session_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
         payload = self._load()
         if session_id:
             for session in payload["sessions"]:
                 if session["id"] == session_id:
+                    if user_id and session.get("user_id") not in {None, user_id}:
+                        raise PermissionError("Session belongs to another user")
+                    if user_id and not session.get("user_id"):
+                        session["user_id"] = user_id
                     session["updated_at"] = utc_now()
                     self._save(payload)
                     return session
 
         session = {
             "id": str(uuid4()),
+            "user_id": user_id,
             "active_project": "",
             "current_workspace": {"name": "", "focus": ""},
             "running_task": "",
@@ -123,21 +139,30 @@ class ConversationStore:
         project_focus = str(session.get("current_workspace", {}).get("focus") or "").strip()
         learned_projects = [{"name": project_name, "focus": project_focus}] if project_name else None
         style_notes = [line.strip() for line in str(developer_instructions or "").splitlines() if line.strip()]
-        payload["long_term_memory"] = merge_long_term_memory(
-            payload.get("long_term_memory"),
+        user_id = str(session.get("user_id") or "") or None
+        source_memory = payload.get("user_long_term_memories", {}).get(user_id) if user_id else payload.get("long_term_memory")
+        updated_memory = merge_long_term_memory(
+            source_memory,
             user_preferences=user_preferences,
             coding_style=style_notes or None,
             projects=learned_projects,
             commands=extract_commands(terminal_output or ""),
         )
+        if user_id:
+            payload.setdefault("user_long_term_memories", {})[user_id] = updated_memory
+        else:
+            payload["long_term_memory"] = updated_memory
         session["updated_at"] = utc_now()
         self._save(payload)
         return session
 
-    def create_conversation(self, title: str = "New chat", session_id: str | None = None) -> dict[str, Any]:
+    def create_conversation(
+        self, title: str = "New chat", session_id: str | None = None, user_id: str | None = None
+    ) -> dict[str, Any]:
         payload = self._load()
         conversation = {
             "id": str(uuid4()),
+            "user_id": user_id,
             "session_id": session_id,
             "active_thread_id": "main",
             "threads": [
@@ -255,15 +280,72 @@ class ConversationStore:
         self._save(payload)
         return conversation
 
+    def compress_short_term_memory(
+        self,
+        conversation_id: str,
+        recent_limit: int = 6,
+        text_limit: int = 2000,
+    ) -> dict[str, Any]:
+        """Bound ephemeral conversation memory without deleting chat history."""
+        payload = self._load()
+        conversation = self._find(payload, conversation_id)
+        memory = normalize_short_term_memory(conversation.get("short_term_memory"))
+        recent_limit = max(1, min(int(recent_limit), 12))
+        text_limit = max(200, min(int(text_limit), 8000))
+        memory["recent_messages"] = [
+            {"role": str(item.get("role", "")), "content": str(item.get("content", ""))[-text_limit:]}
+            for item in memory["recent_messages"][-recent_limit:]
+            if str(item.get("content", "")).strip()
+        ]
+        memory["variables"] = dict(list(memory["variables"].items())[-20:])
+        memory["tool_outputs"] = {
+            str(key)[:120]: str(value)[-text_limit:]
+            for key, value in list(memory["tool_outputs"].items())[-6:]
+            if str(value).strip()
+        }
+        memory["compressed_at"] = utc_now()
+        memory["updated_at"] = memory["compressed_at"]
+        conversation["short_term_memory"] = memory
+        conversation["updated_at"] = utc_now()
+        self._save(payload)
+        return memory
+
+    def refresh_conversation_summary(
+        self,
+        conversation_id: str,
+        keep_recent: int = 6,
+        summary_limit: int = 1600,
+    ) -> dict[str, Any]:
+        """Regenerate the deterministic summary used for older chat context."""
+        payload = self._load()
+        conversation = self._find(payload, conversation_id)
+        messages = [
+            item for item in conversation.get("messages", [])
+            if item.get("role") in {"user", "assistant"} and str(item.get("content", "")).strip()
+        ]
+        keep_recent = max(1, int(keep_recent))
+        older = messages[:-keep_recent] if len(messages) > keep_recent else []
+        summary = " | ".join(
+            f"{item['role']}: {str(item.get('content', '')).strip()[:120]}"
+            for item in older[-8:]
+        )[:max(200, int(summary_limit))]
+        conversation["summary"] = summary
+        conversation["compressed_message_count"] = len(older)
+        conversation["updated_at"] = utc_now()
+        self._save(payload)
+        return {"conversation_id": conversation_id, "summary": summary, "compressed_message_count": len(older)}
+
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
-            return {"sessions": [], "conversations": [], "long_term_memory": default_long_term_memory()}
+            return {"sessions": [], "conversations": [], "long_term_memory": default_long_term_memory(), "user_long_term_memories": {}}
         with self.path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         payload.setdefault("sessions", [])
         payload.setdefault("conversations", [])
+        payload.setdefault("user_long_term_memories", {})
         payload["long_term_memory"] = normalize_long_term_memory(payload.get("long_term_memory"))
         for conversation in payload["conversations"]:
+            conversation.setdefault("user_id", None)
             conversation.setdefault("session_id", None)
             conversation.setdefault("active_thread_id", "main")
             conversation.setdefault("threads", [{"id": "main", "title": "Main", "created_at": conversation.get("created_at", utc_now()), "updated_at": conversation.get("updated_at", utc_now())}])
@@ -275,6 +357,7 @@ class ConversationStore:
                 message.setdefault("thread_id", conversation["active_thread_id"] or "main")
                 message.setdefault("parent_message_id", None)
         for session in payload["sessions"]:
+            session.setdefault("user_id", None)
             session.setdefault("active_project", "")
             session.setdefault("current_workspace", {"name": "", "focus": ""})
             session.setdefault("running_task", "")
@@ -297,6 +380,7 @@ class ConversationStore:
     @staticmethod
     def _find(payload: dict[str, Any], conversation_id: str) -> dict[str, Any]:
         for conversation in payload["conversations"]:
+            conversation.setdefault("user_id", None)
             if conversation["id"] == conversation_id:
                 return conversation
         raise KeyError(f"Conversation not found: {conversation_id}")
@@ -355,7 +439,7 @@ def utc_now() -> str:
 def default_short_term_memory() -> dict[str, Any]:
     return {
         "recent_messages": [], "artifact_ids": [], "task": "", "variables": {},
-        "tool_outputs": {}, "updated_at": "",
+        "tool_outputs": {}, "updated_at": "", "compressed_at": "",
     }
 
 
@@ -368,6 +452,7 @@ def normalize_short_term_memory(memory: Any) -> dict[str, Any]:
     normalized["variables"] = source.get("variables", {}) if isinstance(source.get("variables"), dict) else {}
     normalized["tool_outputs"] = source.get("tool_outputs", {}) if isinstance(source.get("tool_outputs"), dict) else {}
     normalized["updated_at"] = str(source.get("updated_at", ""))
+    normalized["compressed_at"] = str(source.get("compressed_at", ""))
     return normalized
 
 

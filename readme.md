@@ -73,12 +73,21 @@ The app loads `.env` on startup. Restart the server after changing provider keys
 | `AIOS_DATA_FILE` | Legacy/local JSON conversation path. |
 | `AIOS_STORAGE_BACKEND` | `auto`, `postgres`, or `json`; auto selects PostgreSQL when configured. |
 | `DATABASE_URL` | PostgreSQL connection URL for runtime session/chat storage. |
+| `AIOS_AUTH_REQUIRED` | Require a valid Bearer JWT for protected API routes. Defaults to `false` for local compatibility. |
+| `AIOS_JWT_SECRET` | Production JWT signing secret; must contain at least 32 bytes. Blank uses a durable local secret. |
+| `AIOS_JWT_TTL` | Access-token lifetime in seconds. Defaults to `3600`. |
+| `AIOS_ADMIN_EMAILS` | Comma-separated emails granted the admin role at registration. |
+| `AIOS_API_RATE_LIMIT` | Maximum gateway requests per rate window and identity. Defaults to `120`. |
+| `AIOS_API_RATE_WINDOW` | Gateway rate-limit window in seconds. Defaults to `60`. |
+| `AIOS_GATEWAY_DATA_FILE` | Durable local users, JWT secret, and analytics file. With PostgreSQL, only the generated JWT secret remains local. |
 | `AIOS_PROVIDER` | Provider mode: `auto`, `groq`, `gemini`, `openai`, or `deepseek`. |
 | `AIOS_DEFAULT_MODEL` | Optional model override used when provider-specific values are blank. |
 | `AIOS_TEMPERATURE` | Model temperature. |
 | `AIOS_LLM_TIMEOUT` | Provider request timeout in seconds. |
 | `AIOS_LLM_RETRIES` | Retry count for non-streaming calls. |
 | `AIOS_USAGE_FILE` | JSON usage ledger. Defaults to `data/llm_usage.json`. |
+| `AIOS_OBSERVABILITY_FILE` | Durable model, tool, worker, and error event ledger. |
+| `AIOS_OBSERVABILITY_MAX_EVENTS` | Maximum retained observability events. Defaults to `10000`. |
 | `AIOS_ENABLED_VALIDATORS` | Optional comma-separated allowlist of response validator class names. All validators run by default. |
 | `AIOS_DISABLED_VALIDATORS` | Optional comma-separated response validator class names to disable. |
 
@@ -109,6 +118,7 @@ Groq -> Gemini -> OpenAI -> DeepSeek
 AI_tutor/
   app/
     config.py        .env loading and configured key detection
+    gateway.py       authentication, JWT, authorization, schemas, rate policy, and analytics
     llm.py           provider calls, fallback, streaming parsers
     validation.py    ordered response validation, repair, retry, and validator plugins
     main.py          HTTP server, API routes, static file serving
@@ -137,13 +147,27 @@ AI_tutor/
 | Method | Route | Description |
 | --- | --- | --- |
 | `GET` | `/api/health` | Returns server status and configured API key names. |
+| `POST` | `/api/v1/auth/register` | Registers a user, creates a durable session, and returns a Bearer JWT. |
+| `POST` | `/api/v1/auth/login` | Verifies credentials, creates a durable session, and returns a Bearer JWT. |
+| `GET` | `/api/v1/auth/me` | Returns the authenticated user and token session. |
+| `GET` | `/api/v1/analytics` | Returns gateway events for an authenticated administrator. |
 | `GET` | `/api/conversations` | Lists saved conversations. |
 | `GET` | `/api/usage` | Returns accumulated provider token and cost estimates. |
+| `GET` | `/api/observability` | Returns the system health and metrics dashboard payload. |
 | `POST` | `/api/conversations` | Creates a new conversation. |
 | `GET` | `/api/conversations/{id}` | Loads one conversation and its messages. |
 | `POST` | `/api/chat` | Sends a user message and returns a normal or streaming assistant reply. |
 | `POST` | `/api/plan` | Classifies an objective and returns complexity, subtasks, dependencies, tools, and success criteria. |
 | `POST` | `/api/orchestrate` | Plans, routes, and executes supported specialist agents through LangGraph. |
+
+All API routes are available under the stable `/api/v1` prefix. Legacy `/api`
+paths remain aliases for version 1. API responses include `X-Request-Id`,
+`X-API-Version`, and rate-limit headers. Set `AIOS_AUTH_REQUIRED=true` to make
+Bearer authentication mandatory for every protected route. Authenticated
+sessions and conversations are owner-scoped, and invalid requests return a
+structured `{error: {code, message, details}, request_id}` response.
+When PostgreSQL storage is selected, identities and analytics use the existing
+`users` and `analytics` tables; JSON storage uses the local gateway file.
 
 Streaming chat responses use newline-delimited JSON events:
 
