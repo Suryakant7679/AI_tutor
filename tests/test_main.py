@@ -1183,6 +1183,9 @@ class UploadParsingTests(unittest.TestCase):
         self.assertEqual(metadata["metadata"]["chunk_count"], 1)
         self.assertEqual(metadata["chunks"][0]["index"], 0)
 
+    def test_text_cleaning_accepts_missing_subprocess_output(self) -> None:
+        self.assertEqual(clean_extracted_text(None), "")
+
     def test_text_cleaning_normalizes_ocr_noise(self) -> None:
         cleaned = clean_extracted_text("Alpha   beta-\ngamma \n\n\n delta , ok")
 
@@ -1506,6 +1509,27 @@ class UploadParsingTests(unittest.TestCase):
 
         self.assertEqual(metadata["ocr_status"], "unavailable")
         self.assertTrue(metadata["metadata"]["scanned_candidate"])
+
+    def test_scanned_pdf_uses_builtin_poppler_tesseract_pipeline(self) -> None:
+        from app import main as main_module
+
+        def fake_run(command, **kwargs):
+            if command[0] == "pdftoppm":
+                Path(f"{command[-1]}-1.png").write_bytes(b"image")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="Text recovered from scanned PDF", stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "scan.pdf"
+            path.write_bytes(b"%PDF scan")
+            with mock.patch.object(main_module.shutil, "which", side_effect=lambda name: name), mock.patch.object(
+                main_module.subprocess, "run", side_effect=fake_run
+            ):
+                text, status, error = main_module.ocr_pdf_file(path)
+
+        self.assertEqual(status, "completed")
+        self.assertEqual(error, "")
+        self.assertIn("Text recovered from scanned PDF", text)
 
     def test_basic_pdf_text_can_be_extracted(self) -> None:
         text = extract_pdf_text_basic(b"%PDF-1.4\nBT (Hello from PDF text) Tj ET\n%%EOF")

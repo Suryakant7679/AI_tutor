@@ -127,6 +127,15 @@ class ResponseValidatorTests(unittest.TestCase):
         self.assertTrue(context["requires_citations"])
 
 
+    def test_context_does_not_require_citations_for_implicit_rag_instruction(self) -> None:
+        context = validation_context(
+            [
+                {"role": "system", "content": "Cite sources with the bracketed citation labels."},
+                {"role": "user", "content": "Summarize the attached PDF."},
+            ]
+        )
+        self.assertFalse(context["requires_citations"])
+
 class LLMValidationIntegrationTests(unittest.TestCase):
     def test_non_streaming_response_is_validated_and_retried_once(self) -> None:
         route = ModelRoute("general", "openai", "test-model")

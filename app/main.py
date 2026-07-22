@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import hashlib
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1402,8 +1403,8 @@ def decode_text_content(content: bytes, limit: int = 12000) -> str:
         return ""
 
 
-def clean_extracted_text(text: str) -> str:
-    text = text.replace("\x00", " ").replace("\f", "\n")
+def clean_extracted_text(text: str | None) -> str:
+    text = (text or "").replace("\x00", " ").replace("\f", "\n")
     text = "".join(char if char == "\n" or char == "\t" or ord(char) >= 32 else " " for char in text)
     text = re.sub(r"(?<=\w)-\n(?=\w)", "", text)
     text = re.sub(r"[^\S\n]+", " ", text)
@@ -1939,6 +1940,8 @@ def extract_pdf_text_file(path: Path) -> tuple[str, str]:
             capture_output=True,
             check=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1970,9 +1973,51 @@ def ocr_image_file(path: Path) -> tuple[str, str, str]:
 
 def ocr_pdf_file(path: Path) -> tuple[str, str, str]:
     configured = os.getenv("AIOS_PDF_OCR_COMMAND") or os.getenv("AIOS_OCR_COMMAND")
-    if not configured:
-        return "", "unavailable", "Scanned PDF OCR requires AIOS_PDF_OCR_COMMAND or AIOS_OCR_COMMAND."
-    return run_ocr_command(command_from_template(configured, path))
+    if configured:
+        return run_ocr_command(command_from_template(configured, path))
+
+    pdftoppm = shutil.which("pdftoppm")
+    tesseract = shutil.which("tesseract")
+    if not pdftoppm or not tesseract:
+        return "", "unavailable", "Scanned PDF OCR requires Poppler pdftoppm and Tesseract, or AIOS_PDF_OCR_COMMAND."
+
+    timeout = int(os.getenv("AIOS_OCR_TIMEOUT", "25"))
+    max_pages = max(1, int(os.getenv("AIOS_PDF_OCR_MAX_PAGES", "20")))
+    dpi = max(72, min(int(os.getenv("AIOS_PDF_OCR_DPI", "200")), 600))
+    try:
+        with tempfile.TemporaryDirectory(prefix="aios-pdf-ocr-") as temp_dir:
+            output_prefix = Path(temp_dir) / "page"
+            converted = subprocess.run(
+                [pdftoppm, "-png", "-r", str(dpi), "-f", "1", "-l", str(max_pages), str(path), str(output_prefix)],
+                capture_output=True, check=False, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            )
+            if converted.returncode != 0:
+                error = clean_extracted_text(converted.stderr) or f"PDF conversion exited with {converted.returncode}."
+                return "", "failed", error
+
+            pages = sorted(Path(temp_dir).glob("page-*.png"))
+            if not pages:
+                return "", "failed", "PDF conversion produced no pages for OCR."
+
+            page_text: list[str] = []
+            errors: list[str] = []
+            for page in pages:
+                completed = subprocess.run(
+                    [tesseract, str(page), "stdout"],
+                    capture_output=True, check=False, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                )
+                text = clean_extracted_text(completed.stdout)
+                if text:
+                    page_text.append(text)
+                if completed.returncode != 0:
+                    errors.append(clean_extracted_text(completed.stderr) or f"Tesseract exited with {completed.returncode} for {page.name}.")
+
+            extracted = clean_extracted_text("\n\n".join(page_text))
+            if extracted:
+                return extracted, "completed", "; ".join(errors)[:1000]
+            return "", "failed", ("; ".join(errors) or "OCR completed but extracted no text.")[:1000]
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return "", "failed", str(exc)
 
 
 def ocr_command_for_path(path: Path) -> list[str]:
@@ -2005,6 +2050,8 @@ def run_ocr_command(command: list[str]) -> tuple[str, str, str]:
             capture_output=True,
             check=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:

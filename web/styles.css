@@ -405,6 +405,7 @@ body.compact .message {
 }
 
 .plus-upload {
+  position: relative;
   width: 40px;
   height: 40px;
   display: grid;
@@ -416,6 +417,51 @@ body.compact .message {
   line-height: 1;
 }
 
+.plus-upload::before,
+.plus-upload::after {
+  position: absolute;
+  left: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 20;
+}
+
+.plus-upload::before {
+  content: attr(data-tooltip);
+  bottom: calc(100% + 10px);
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: #111;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.plus-upload::after {
+  content: "";
+  bottom: calc(100% + 5px);
+  border: 5px solid transparent;
+  border-top-color: #111;
+  border-bottom: 0;
+}
+
+.plus-upload:hover::before,
+.plus-upload:hover::after,
+.plus-upload:focus-visible::before,
+.plus-upload:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.plus-upload:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
 #attachment-count {
   color: var(--muted);
   font-size: 12px;

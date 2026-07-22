@@ -312,9 +312,11 @@ def validation_context(messages: Sequence[Mapping[str, str]]) -> dict[str, Any]:
     system_text = "\n".join(item.get("content", "") for item in messages if item.get("role") == "system")
     expects_json = bool(re.search(r"\b(?:respond|return|output|answer|format(?:ted)?)\b[^.\n]{0,30}\bjson\b", user_text, re.IGNORECASE))
     expects_python = bool(re.search(r"\b(?:respond|return|output|answer)\b[^.\n]{0,40}\bpython(?: code)?\b", user_text, re.IGNORECASE))
+    # Retrieved context asks the model to use citation labels, but omission should
+    # not discard an otherwise useful answer. Enforce citations only when the
+    # user explicitly requests them.
     requires_citations = bool(
         re.search(r"\b(?:cite|citations?|provide (?:your )?sources?)\b", user_text, re.IGNORECASE)
-        or "Cite sources with the bracketed citation labels." in system_text
     )
     return {
         "messages": list(messages),
