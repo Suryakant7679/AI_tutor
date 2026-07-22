@@ -16,7 +16,7 @@ from app.storage import create_store
 from app.redis_state import RedisState
 from app.vector_store import JsonVectorStore, QdrantVectorStore
 from app.mcp.filesystem_tools import WorkspaceFilesystem
-from app.mcp.python_tools import run_restricted_python
+from app.mcp.python_tools import python_package_info, run_restricted_python
 from app.mcp.router import MCPRouter
 from app.mcp.browser_tools import validate_public_url
 from app.mcp.docker_tools import _safe_name
@@ -74,6 +74,9 @@ from app.main import (
     fit_messages_to_token_window,
     generate_embedding,
     git_status_context_text,
+    github_answer_text,
+    github_context_text,
+    github_repository_reference,
     hybrid_retrieve,
     iter_stream_chunks,
     load_artifacts,
@@ -84,6 +87,7 @@ from app.main import (
     parse_json_body,
     parse_multipart_files,
     project_context_text,
+    python_mcp_answer_text,
     rank_context_sections,
     remove_duplicate_context_sections,
     related_conversations,
@@ -667,6 +671,23 @@ class MCPRouterTests(unittest.TestCase):
             result = WorkspaceFilesystem(temp_dir, allow_write=True).write_file("new.txt", "data")
             self.assertEqual(result["bytes_written"], 4)
 
+    def test_python_package_info_is_read_only_and_reports_related_packages(self) -> None:
+        result = python_package_info("langchain")
+        self.assertEqual(result["source"], "Python importlib.metadata")
+        self.assertIn("related_installed_packages", result)
+        with self.assertRaises(ValueError):
+            python_package_info("../unsafe")
+
+    def test_explicit_python_mcp_package_request_bypasses_llm(self) -> None:
+        answer = python_mcp_answer_text("use python mcp tool to give details of langchain")
+        self.assertIn("Python MCP package inspection", answer)
+        self.assertIn("Top-level package installed: no", answer)
+        self.assertIn("langchain-core", answer)
+
+    def test_python_router_selects_package_info(self) -> None:
+        route = MCPRouter().classify("use python mcp tool to give details of langchain")
+        self.assertEqual(route.category, "python")
+        self.assertEqual(route.suggested_tool, "package_info")
     def test_restricted_python_returns_results_and_blocks_imports(self) -> None:
         result = run_restricted_python("values = [1, 2, 3]\nresult = sum(values)")
         self.assertTrue(result["ok"])
@@ -697,6 +718,104 @@ class MCPRouterTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("##", result["stdout"])
 
+    def test_github_router_selects_contributors(self) -> None:
+        route = MCPRouter().classify("show GitHub contributors")
+        self.assertEqual(route.category, "github")
+        self.assertEqual(route.suggested_tool, "github_contributors")
+
+    def test_github_reader_returns_contributors_and_recent_pull_request_details(self) -> None:
+        reader = GitHubReader()
+        reader._get = mock.Mock(
+            side_effect=[
+                [{"login": "alice", "contributions": 7, "html_url": "https://github.com/alice"}],
+                [
+                    {
+                        "number": 4,
+                        "title": "Improve docs",
+                        "state": "closed",
+                        "html_url": "https://github.com/o/r/pull/4",
+                        "draft": False,
+                        "user": {"login": "alice"},
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "closed_at": "2026-01-02T00:00:00Z",
+                        "merged_at": "2026-01-02T00:00:00Z",
+                    }
+                ],
+            ]
+        )
+
+        self.assertEqual(reader.contributors("o", "r")[0]["contributions"], 7)
+        pull = reader.pull_requests("o", "r", state="all")[0]
+        self.assertEqual(pull["author"], "alice")
+        self.assertEqual(pull["merged_at"], "2026-01-02T00:00:00Z")
+        self.assertEqual(reader._get.call_args_list[1].args[3]["state"], "all")
+        self.assertEqual(reader._get.call_args_list[1].args[3]["sort"], "updated")
+
+    def test_github_answer_never_falls_back_to_model_memory_on_api_failure(self) -> None:
+        from app import main as main_module
+
+        github = mock.Mock()
+        github.repository.side_effect = RuntimeError("temporary GitHub failure")
+        with mock.patch.object(main_module, "GITHUB", github):
+            answer = github_answer_text(
+                "Refer https://github.com/Rohit-24gb/Sustainability-connect and list contributors"
+            )
+
+        self.assertIn("could not retrieve live data", answer)
+        self.assertIn("will not answer from cached conversation memory", answer)
+    def test_github_answer_is_deterministic_and_reports_empty_pull_requests(self) -> None:
+        from app import main as main_module
+
+        github = mock.Mock()
+        github.repository.return_value = {
+            "full_name": "Rohit-24gb/Sustainability-connect",
+            "html_url": "https://github.com/Rohit-24gb/Sustainability-connect",
+        }
+        github.contributors.return_value = [
+            {"login": "Rohit-24gb", "contributions": 62, "url": "https://github.com/Rohit-24gb"},
+            {"login": "Suryakant7679", "contributions": 9, "url": "https://github.com/Suryakant7679"},
+        ]
+        github.pull_requests.return_value = []
+
+        with mock.patch.object(main_module, "GITHUB", github):
+            answer = github_answer_text(
+                "Refer https://github.com/Rohit-24gb/Sustainability-connect and list contributors and pull requests"
+            )
+
+        self.assertIn("Rohit-24gb", answer)
+        self.assertIn("62 contributions", answer)
+        self.assertIn("Suryakant7679", answer)
+        self.assertIn("No open, closed, or merged pull requests were found.", answer)
+        self.assertNotIn("Abhishek-24gb", answer)
+    def test_live_github_context_uses_requested_repository_data(self) -> None:
+        from app import main as main_module
+
+        github = mock.Mock()
+        github.repository.return_value = {
+            "full_name": "Rohit-24gb/Sustainability-connect",
+            "html_url": "https://github.com/Rohit-24gb/Sustainability-connect",
+        }
+        github.contributors.return_value = [
+            {"login": "Rohit-24gb", "contributions": 62, "url": "https://github.com/Rohit-24gb"}
+        ]
+        github.pull_requests.return_value = []
+
+        with mock.patch.object(main_module, "GITHUB", github):
+            context = github_context_text(
+                "Refer https://github.com/Rohit-24gb/Sustainability-connect and list contributors and recent pull requests"
+            )
+
+        self.assertIn("Live GitHub MCP results", context)
+        self.assertIn("Rohit-24gb", context)
+        self.assertIn('"pull_requests": []', context)
+        github.pull_requests.assert_called_once_with(
+            "Rohit-24gb", "Sustainability-connect", state="all", sort="updated", direction="desc"
+        )
+        self.assertEqual(
+            github_repository_reference("https://github.com/Rohit-24gb/Sustainability-connect"),
+            ("Rohit-24gb", "Sustainability-connect"),
+        )
     def test_github_and_docker_names_are_validated(self) -> None:
         with self.assertRaises(ValueError): GitHubReader().repository("bad/name", "repo")
         with self.assertRaises(ValueError): _safe_name("--dangerous-option")

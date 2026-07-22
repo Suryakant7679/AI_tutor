@@ -33,6 +33,9 @@ try:
     from app.store import utc_now
     from app.vector_store import create_vector_store
     from app.observability import OBSERVABILITY
+    from app.mcp.github_tools import GitHubReader
+    from app.mcp.python_tools import python_package_info
+    from app.mcp.executor import explicit_mcp_answer
     from app.agents.planner import PlannerAgent
     from app.agents.orchestrator import LangGraphOrchestrator
     from app.agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
@@ -48,6 +51,9 @@ except ModuleNotFoundError:
     from store import utc_now
     from vector_store import create_vector_store
     from observability import OBSERVABILITY
+    from mcp.github_tools import GitHubReader
+    from mcp.python_tools import python_package_info
+    from mcp.executor import explicit_mcp_answer
     from agents.planner import PlannerAgent
     from agents.orchestrator import LangGraphOrchestrator
     from agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
@@ -83,6 +89,7 @@ JWT = JWTService(
     audience=os.getenv("AIOS_JWT_AUDIENCE", "aios-api"),
     ttl_seconds=int(os.getenv("AIOS_JWT_TTL", "3600")),
 )
+GITHUB = GitHubReader()
 PLANNER = PlannerAgent()
 SPECIALIST_AGENTS = SpecialistAgentRegistry(
     memory=MemoryAgent(STORE),
@@ -521,6 +528,78 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 conversation = STORE.get_conversation(conversation_id)
                 thread_id = thread_id or conversation.get("active_thread_id") or "main"
                 context_window_tokens = session["user_preferences"]["context_window_tokens"]
+                generic_mcp = explicit_mcp_answer(message)
+                if generic_mcp:
+                    mcp_answer, mcp_category = generic_mcp
+                    if body.get("stream"):
+                        self.send_tool_chat_stream(
+                            session["id"], conversation_id, thread_id, mcp_answer, f"{mcp_category}-mcp", mcp_category
+                        )
+                        return
+                    assistant_message = STORE.add_message(conversation_id, "assistant", mcp_answer, thread_id=thread_id)
+                    upsert_vector_records([vector_record_for_message(conversation_id, assistant_message, self.user_id)])
+                    memory = STORE.update_short_term_memory(conversation_id)
+                    REDIS.set_temporary_memory(conversation_id, memory)
+                    STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
+                    self.send_json({
+                        "session_id": session["id"], "conversation_id": conversation_id, "thread_id": thread_id,
+                        "context_token_count": 0, "context_window_tokens": context_window_tokens,
+                        "provider": f"{mcp_category}-mcp", "task": mcp_category, "model": "deterministic-tool-result",
+                        "message": {"role": "assistant", "content": mcp_answer},
+                    })
+                    return
+                python_answer = python_mcp_answer_text(message)
+                if python_answer:
+                    if body.get("stream"):
+                        self.send_tool_chat_stream(
+                            session["id"], conversation_id, thread_id, python_answer, "python-mcp", "python"
+                        )
+                        return
+                    assistant_message = STORE.add_message(conversation_id, "assistant", python_answer, thread_id=thread_id)
+                    upsert_vector_records([vector_record_for_message(conversation_id, assistant_message, self.user_id)])
+                    memory = STORE.update_short_term_memory(conversation_id)
+                    REDIS.set_temporary_memory(conversation_id, memory)
+                    STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
+                    self.send_json(
+                        {
+                            "session_id": session["id"],
+                            "conversation_id": conversation_id,
+                            "thread_id": thread_id,
+                            "context_token_count": 0,
+                            "context_window_tokens": context_window_tokens,
+                            "provider": "python-mcp",
+                            "task": "python",
+                            "model": "deterministic-tool-result",
+                            "message": {"role": "assistant", "content": python_answer},
+                        }
+                    )
+                    return
+                github_answer = github_answer_text(message)
+                if github_answer:
+                    if body.get("stream"):
+                        self.send_tool_chat_stream(
+                            session["id"], conversation_id, thread_id, github_answer, "github-mcp", "github"
+                        )
+                        return
+                    assistant_message = STORE.add_message(conversation_id, "assistant", github_answer, thread_id=thread_id)
+                    upsert_vector_records([vector_record_for_message(conversation_id, assistant_message, self.user_id)])
+                    memory = STORE.update_short_term_memory(conversation_id)
+                    REDIS.set_temporary_memory(conversation_id, memory)
+                    STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
+                    self.send_json(
+                        {
+                            "session_id": session["id"],
+                            "conversation_id": conversation_id,
+                            "thread_id": thread_id,
+                            "context_token_count": 0,
+                            "context_window_tokens": context_window_tokens,
+                            "provider": "github-mcp",
+                            "task": "github",
+                            "model": "deterministic-tool-result",
+                            "message": {"role": "assistant", "content": github_answer},
+                        }
+                    )
+                    return
                 llm_messages = conversation_messages_for_llm(
                     conversation["messages"],
                     max_tokens=context_window_tokens,
@@ -624,6 +703,49 @@ class AIOSHandler(BaseHTTPRequestHandler):
         save_artifacts(artifacts)
         return created
 
+    def send_tool_chat_stream(
+        self,
+        session_id: str,
+        conversation_id: str,
+        thread_id: str,
+        assistant_text: str,
+        provider: str,
+        task: str,
+    ) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Request-Id", getattr(self, "request_id", ""))
+        self.send_header("X-API-Version", getattr(self, "api_version", "1"))
+        for name, value in getattr(self, "rate_headers", {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        try:
+            self.write_ndjson_event(
+                {
+                    "type": "meta",
+                    "session_id": session_id,
+                    "conversation_id": conversation_id,
+                    "thread_id": thread_id,
+                    "provider": provider,
+                    "task": task,
+                    "model": "deterministic-tool-result",
+                }
+            )
+            self.write_ndjson_event({"type": "progress", "stage": "tool", "message": task.title() + " MCP lookup complete"})
+            for chunk in iter_stream_chunks(iter((assistant_text,)), chunk_size=64):
+                self.write_ndjson_event({"type": "delta", "content": chunk})
+            assistant_message = STORE.add_message(conversation_id, "assistant", assistant_text, thread_id=thread_id)
+            upsert_vector_records([vector_record_for_message(conversation_id, assistant_message, self.user_id)])
+            memory = STORE.update_short_term_memory(conversation_id)
+            REDIS.set_temporary_memory(conversation_id, memory)
+            STORE.set_recovery_state(conversation_id, {"status": "complete", "thread_id": thread_id})
+            self.write_ndjson_event({"type": "done", "message": {"role": "assistant", "content": assistant_text}})
+            self.record_analytics(200)
+        except (BrokenPipeError, ConnectionResetError):
+            STORE.set_recovery_state(conversation_id, {"status": "interrupted", "thread_id": thread_id})
+            self.record_analytics(499)
     def send_chat_stream(
         self,
         session_id: str,
@@ -950,14 +1072,16 @@ def context_sections(
     short_term_memory: dict[str, Any] | None = None,
     long_term_memory: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    github_live = github_context_text(retrieval_query)
     return [
         {"name": "developer_instructions", "priority": 100, "text": developer_instructions_context_text(session)},
+        {"name": "github_live", "priority": 94, "text": github_live},
         {"name": "project", "priority": 95, "text": project_context_text(session)},
         {"name": "running_task", "priority": 92, "text": running_task_state_context_text(session)},
         {"name": "short_term_memory", "priority": 90, "text": short_term_memory_context_text(short_term_memory or {})},
         {"name": "long_term_memory", "priority": 89, "text": long_term_memory_context_text(long_term_memory or {})},
         {"name": "user_preferences", "priority": 88, "text": user_preferences_context_text(session)},
-        {"name": "retrieved_context", "priority": 86, "text": retrieved_context_text(retrieval_query, user_id=str(session.get("user_id") or "") or None)},
+        {"name": "retrieved_context", "priority": 86, "text": "" if github_live else retrieved_context_text(retrieval_query, user_id=str(session.get("user_id") or "") or None)},
         {"name": "uploaded_files", "priority": 82, "text": uploaded_files_context_text(artifact_ids)},
         {"name": "open_files", "priority": 80, "text": open_files_context_text(session)},
         {"name": "git_status", "priority": 72, "text": git_status_context_text()},
@@ -966,6 +1090,140 @@ def context_sections(
         {"name": "browser_results", "priority": 60, "text": browser_results_context_text(session)},
     ]
 
+
+def python_mcp_answer_text(query: str) -> str:
+    if not re.search(r"\b(?:use|using|with)\s+(?:the\s+)?python\s+mcp(?:\s+tool)?\b", query, re.IGNORECASE):
+        return ""
+    match = re.search(
+        r"\b(?:details?|information)\s+(?:of|about|on)\s+(?:the\s+)?([A-Za-z0-9_.-]{1,100})\b",
+        query,
+        re.IGNORECASE,
+    )
+    if not match:
+        return (
+            "Python MCP was explicitly requested, but no executable calculation or package name was identified. "
+            "For package inspection, try: Use Python MCP tool to give details of langchain."
+        )
+    package = match.group(1)
+    result = python_package_info(package)
+    lines = [
+        f"Python MCP package inspection for '{package}':",
+        f"- Source: {result['source']}",
+        f"- Top-level package installed: {'yes' if result['installed'] else 'no'}",
+    ]
+    if result["package"]:
+        item = result["package"]
+        lines.extend(
+            [
+                f"- Installed version: {item['version']}",
+                f"- Summary: {item['summary'] or 'Not provided in package metadata'}",
+                f"- Requires Python: {item['requires_python'] or 'Not specified'}",
+            ]
+        )
+    related = result["related_installed_packages"]
+    if related:
+        lines.append("- Related installed packages:")
+        for item in related:
+            summary = f" — {item['summary']}" if item["summary"] else ""
+            lines.append(f"  - {item['name']} {item['version']}{summary}")
+    lines.append(
+        "- Scope: installed-package metadata only. Ask to browse official documentation for conceptual or current API details."
+    )
+    return "\n".join(lines)
+
+def github_repository_reference(text: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"(?:https?://)?github\.com/([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100})",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    owner = match.group(1)
+    repo = match.group(2).removesuffix(".git")
+    return (owner, repo) if repo else None
+
+
+def github_lookup(query: str) -> tuple[str, str, dict[str, Any]] | None:
+    reference = github_repository_reference(query)
+    if reference is None:
+        return None
+    owner, repo = reference
+    lowered = query.casefold()
+    try:
+        payload: dict[str, Any] = {"repository": GITHUB.repository(owner, repo)}
+        if "contributor" in lowered:
+            payload["contributors"] = GITHUB.contributors(owner, repo)
+        if "pull request" in lowered or re.search(r"\bprs?\b", lowered):
+            payload["pull_requests"] = GITHUB.pull_requests(owner, repo, state="all", sort="updated", direction="desc")
+    except Exception as exc:
+        OBSERVABILITY.record("tool", "github", success=False, error=str(exc), properties={"owner": owner, "repo": repo})
+        return None
+    OBSERVABILITY.record("tool", "github", properties={"owner": owner, "repo": repo, "operations": list(payload)})
+    return owner, repo, payload
+
+
+def github_answer_text(query: str) -> str:
+    reference = github_repository_reference(query)
+    if reference is None:
+        return ""
+    lookup = github_lookup(query)
+    if lookup is None:
+        owner, repo = reference
+        return (
+            f"GitHub MCP could not retrieve live data for [{owner}/{repo}]"
+            f"(https://github.com/{owner}/{repo}). I will not answer from cached conversation memory; please retry."
+        )
+    owner, repo, payload = lookup
+    repository = payload["repository"]
+    repository_url = str(repository.get("html_url") or f"https://github.com/{owner}/{repo}")
+    lines = [f"Live GitHub results for [{owner}/{repo}]({repository_url}):"]
+
+    if "contributors" in payload:
+        contributors = payload["contributors"]
+        lines.append("\nContributors:")
+        if contributors:
+            for item in contributors:
+                lines.append(
+                    f"- [{item['login']}]({item['url']}) — {int(item.get('contributions', 0))} contributions"
+                )
+        else:
+            lines.append("- No contributors were returned by GitHub.")
+
+    if "pull_requests" in payload:
+        pull_requests = payload["pull_requests"]
+        lines.append("\nRecent pull requests (all states, most recently updated first):")
+        if pull_requests:
+            for item in pull_requests:
+                state = "merged" if item.get("merged_at") else str(item.get("state") or "unknown")
+                author = f" by {item['author']}" if item.get("author") else ""
+                updated = f", updated {item['updated_at']}" if item.get("updated_at") else ""
+                lines.append(f"- [#{item['number']}: {item['title']}]({item['url']}) — {state}{author}{updated}")
+        else:
+            lines.append("- No open, closed, or merged pull requests were found.")
+
+    if len(lines) == 1:
+        lines.extend(
+            [
+                f"- Default branch: {repository.get('default_branch') or 'unknown'}",
+                f"- Stars: {int(repository.get('stargazers_count') or 0)}",
+                f"- Forks: {int(repository.get('forks_count') or 0)}",
+                f"- Last updated: {repository.get('updated_at') or 'unknown'}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def github_context_text(query: str) -> str:
+    lookup = github_lookup(query)
+    if lookup is None:
+        return ""
+    _, _, payload = lookup
+    return (
+        "Live GitHub MCP results (authoritative for this request; do not replace with conversation memory). "
+        "State clearly when a returned list is empty. Cite the included GitHub URLs:\n"
+        + json.dumps(payload, ensure_ascii=False, default=str)
+    )
 
 def short_term_memory_context_text(memory: dict[str, Any]) -> str:
     task = str(memory.get("task") or "").strip()

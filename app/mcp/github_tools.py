@@ -25,6 +25,46 @@ class GitHubReader:
     def issues(self, owner: str, repo: str, state: str = "open", limit: int = 20) -> list[dict[str, Any]]:
         values = self._get(owner, repo, "/issues", {"state": state, "per_page": max(1, min(limit, 100))})
         return [{"number": item["number"], "title": item["title"], "state": item["state"], "url": item["html_url"]} for item in values if "pull_request" not in item]
-    def pull_requests(self, owner: str, repo: str, state: str = "open", limit: int = 20) -> list[dict[str, Any]]:
-        values = self._get(owner, repo, "/pulls", {"state": state, "per_page": max(1, min(limit, 100))})
-        return [{"number": item["number"], "title": item["title"], "state": item["state"], "url": item["html_url"], "draft": item.get("draft", False)} for item in values]
+    def contributors(self, owner: str, repo: str, limit: int = 100) -> list[dict[str, Any]]:
+        values = self._get(owner, repo, "/contributors", {"per_page": max(1, min(limit, 100))})
+        return [
+            {"login": item["login"], "contributions": item.get("contributions", 0), "url": item["html_url"]}
+            for item in values
+        ]
+
+    def pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "open",
+        limit: int = 20,
+        sort: str = "updated",
+        direction: str = "desc",
+    ) -> list[dict[str, Any]]:
+        if state not in {"open", "closed", "all"}:
+            raise ValueError("Pull-request state must be open, closed, or all")
+        if sort not in {"created", "updated", "popularity", "long-running"}:
+            raise ValueError("Invalid pull-request sort")
+        if direction not in {"asc", "desc"}:
+            raise ValueError("Pull-request direction must be asc or desc")
+        values = self._get(
+            owner,
+            repo,
+            "/pulls",
+            {"state": state, "sort": sort, "direction": direction, "per_page": max(1, min(limit, 100))},
+        )
+        return [
+            {
+                "number": item["number"],
+                "title": item["title"],
+                "state": item["state"],
+                "url": item["html_url"],
+                "draft": item.get("draft", False),
+                "author": (item.get("user") or {}).get("login"),
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+                "closed_at": item.get("closed_at"),
+                "merged_at": item.get("merged_at"),
+            }
+            for item in values
+        ]

@@ -16,11 +16,11 @@ class ToolRoute:
 class MCPRouter:
     TOOL_CATALOG = {
         "filesystem": ["list_files", "read_file", "search_text", "write_file"],
-        "python": ["run_python"],
+        "python": ["run_python", "package_info"],
         "terminal": ["run_command"],
         "browser": ["browse_url", "page_links"],
         "git": ["git_status", "git_diff", "git_log", "git_show", "git_branches"],
-        "github": ["github_repository", "github_issues", "github_pull_requests"],
+        "github": ["github_repository", "github_contributors", "github_issues", "github_pull_requests"],
         "docker": ["docker_containers", "docker_inspect", "docker_logs", "docker_images"],
         "kubernetes": ["kubernetes_contexts", "kubernetes_namespaces", "kubernetes_resources", "kubernetes_describe", "kubernetes_logs"],
         "postgresql": ["postgres_tables", "postgres_columns", "postgres_query"],
@@ -59,7 +59,7 @@ class MCPRouter:
         if re.search(r"\bredis\b", text):
             return ToolRoute("redis", "aios-redis", "redis_keys", 0.95, "Request targets Redis")
         if re.search(r"\b(github|pull request|github issue)\b", text):
-            tool = "github_pull_requests" if "pull request" in text else "github_issues" if "issue" in text else "github_repository"
+            tool = "github_contributors" if "contributor" in text else "github_pull_requests" if "pull request" in text else "github_issues" if "issue" in text else "github_repository"
             return ToolRoute("github", "aios-github", tool, 0.94, "Request targets GitHub")
         if re.search(r"\b(docker|container|docker image)\b", text):
             tool = "docker_logs" if "log" in text else "docker_images" if "image" in text else "docker_containers"
@@ -81,7 +81,8 @@ class MCPRouter:
             if re.search(pattern, text):
                 return ToolRoute("filesystem", "aios-filesystem", tool, 0.9, f"Matched filesystem operation: {tool}")
         if re.search(r"\b(python|calculate|compute|statistics|equation|simulate|data analysis)\b", text):
-            return ToolRoute("python", "aios-python", "run_python", 0.88, "Request requires Python computation")
+            tool = "package_info" if re.search(r"\b(package|library|framework|details? of|information (?:about|on))\b", text) else "run_python"
+            return ToolRoute("python", "aios-python", tool, 0.88, "Request requires Python tooling")
         return ToolRoute("general", "", "", 0.35, "No filesystem or Python tool requirement detected")
 
     def classify_dict(self, request: str) -> dict:

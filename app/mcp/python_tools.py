@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import importlib.metadata
+import re
 import os
 import subprocess
 import sys
@@ -51,3 +53,35 @@ def run_restricted_python(code: str, timeout_seconds: int = 5) -> dict[str, Any]
         else:
             clean_lines.append(line)
     return {"ok": completed.returncode == 0, "return_code": completed.returncode, "stdout": "\n".join(clean_lines), "stderr": stderr, "result": result}
+
+def python_package_info(package: str) -> dict[str, Any]:
+    """Return read-only installed-package metadata without importing the package."""
+    requested = package.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", requested):
+        raise ValueError("Invalid Python package name")
+    normalized = requested.casefold().replace("_", "-")
+    matches: list[dict[str, Any]] = []
+    for distribution in importlib.metadata.distributions():
+        metadata = distribution.metadata
+        name = str(metadata.get("Name") or "").strip()
+        package_name = name.casefold().replace("_", "-")
+        if package_name == normalized or package_name.startswith(normalized + "-"):
+            matches.append(
+                {
+                    "name": name,
+                    "version": distribution.version,
+                    "summary": str(metadata.get("Summary") or ""),
+                    "home_page": str(metadata.get("Home-page") or metadata.get("Project-URL") or ""),
+                    "requires_python": str(metadata.get("Requires-Python") or ""),
+                }
+            )
+    matches.sort(key=lambda item: (item["name"].casefold() != normalized, item["name"].casefold()))
+    exact = next((item for item in matches if item["name"].casefold().replace("_", "-") == normalized), None)
+    return {
+        "requested": requested,
+        "installed": exact is not None,
+        "package": exact,
+        "related_installed_packages": [item for item in matches if item is not exact],
+        "source": "Python importlib.metadata",
+        "scope": "Installed-package metadata only; this tool does not retrieve web documentation.",
+    }

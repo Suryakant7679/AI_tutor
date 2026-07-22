@@ -9,6 +9,9 @@ def github_repository(owner: str, repo: str) -> dict: return github.repository(o
 @mcp.tool()
 def github_issues(owner: str, repo: str, state: str = "open", limit: int = 20) -> list[dict]: return github.issues(owner, repo, state, limit)
 @mcp.tool()
-def github_pull_requests(owner: str, repo: str, state: str = "open", limit: int = 20) -> list[dict]: return github.pull_requests(owner, repo, state, limit)
+def github_contributors(owner: str, repo: str, limit: int = 100) -> list[dict]: return github.contributors(owner, repo, limit)
+
+@mcp.tool()
+def github_pull_requests(owner: str, repo: str, state: str = "open", limit: int = 20, sort: str = "updated", direction: str = "desc") -> list[dict]: return github.pull_requests(owner, repo, state, limit, sort, direction)
 
 if __name__ == "__main__": mcp.run(transport="stdio")
