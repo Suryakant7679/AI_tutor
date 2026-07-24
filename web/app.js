@@ -1050,26 +1050,19 @@ async function recoverInterruptedStream() {
 }
 
 async function boot() {
+  // A browser/page start should always present a clean composer. Persisted
+  // conversations remain available in Recent and are only opened by the user.
+  setActiveConversation(null);
+  setActiveThread("main");
+  localStorage.removeItem(ACTIVE_STREAM_KEY);
+  messages.innerHTML = "";
   await ensureSession();
   await syncSessionContext();
-  const conversations = await loadConversations();
+  await loadConversations();
   await loadArtifacts();
   renderNotifications();
   updateEmptyState();
-  const recoveryId = localStorage.getItem(ACTIVE_STREAM_KEY);
-  if (recoveryId) {
-    await recoverInterruptedStream();
-  } else if (activeConversationId && conversations.some((conversation) => conversation.id === activeConversationId)) {
-    try {
-      await openConversation(activeConversationId);
-    } catch (error) {
-      console.error("Could not restore active conversation", error);
-      setActiveConversation(null);
-      updateEmptyState();
-    }
-  } else if (activeConversationId) {
-    setActiveConversation(null);
-  }
+  input.focus();
 }
 
 boot();

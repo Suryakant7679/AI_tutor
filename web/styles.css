@@ -244,25 +244,6 @@ button.secondary {
   background: transparent;
 }
 
-.sidebar-footer {
-  margin-top: auto;
-  flex: 0 0 auto;
-  border-top: 1px solid var(--line);
-  padding: 10px 6px 2px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.sidebar-footer strong,
-.sidebar-footer span {
-  display: block;
-}
-
-.sidebar-footer span {
-  color: var(--muted);
-  font-size: 12px;
-}
 
 .chat {
   min-width: 0;
