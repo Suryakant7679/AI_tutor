@@ -905,6 +905,16 @@ class StreamingChunkingTests(unittest.TestCase):
 
 
 class SessionStoreTests(unittest.TestCase):
+    def test_conversation_can_be_renamed_and_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ConversationStore(os.path.join(temp_dir, "conversations.json"))
+            conversation = store.create_conversation()
+            renamed = store.rename_conversation(conversation["id"], "Study notes")
+            self.assertEqual(renamed["title"], "Study notes")
+            deleted = store.delete_conversation(conversation["id"])
+            self.assertEqual(deleted["id"], conversation["id"])
+            self.assertEqual(store.list_conversations(), [])
+
     def test_session_is_created_and_reused(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = ConversationStore(os.path.join(temp_dir, "conversations.json"))

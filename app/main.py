@@ -652,6 +652,42 @@ class AIOSHandler(BaseHTTPRequestHandler):
             return
         self.send_error(404, "Not found")
 
+    def do_PATCH(self) -> None:
+        path = urlparse(self.path).path
+        prepared = self.prepare_api_request(path)
+        if prepared is None:
+            return
+        path = prepared
+        if path.startswith("/api/conversations/"):
+            conversation_id = path.rsplit("/", 1)[-1]
+            if not self.authorize_conversation(conversation_id):
+                return
+            try:
+                body = self.read_json()
+                title = str(body.get("title") or "").strip()
+                conversation = STORE.rename_conversation(conversation_id, title)
+                self.send_json({"conversation": compact_conversations([conversation])[0]})
+            except ValueError as exc:
+                self.send_gateway_error(GatewayError(400, "invalid_conversation_title", str(exc)))
+            return
+        self.send_error(404, "Not found")
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        prepared = self.prepare_api_request(path)
+        if prepared is None:
+            return
+        path = prepared
+        if path.startswith("/api/conversations/"):
+            conversation_id = path.rsplit("/", 1)[-1]
+            if not self.authorize_conversation(conversation_id):
+                return
+            STORE.delete_conversation(conversation_id)
+            REDIS.delete_temporary_memory(conversation_id)
+            self.send_json({"deleted": True, "conversation_id": conversation_id})
+            return
+        self.send_error(404, "Not found")
+
     def receive_uploads(self) -> list[dict[str, Any]]:
         raw_length = self.headers.get("Content-Length", "0").strip()
         length = int(raw_length or "0")

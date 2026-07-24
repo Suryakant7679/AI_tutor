@@ -133,6 +133,14 @@ class PostgreSQLConversationStore(ConversationStore):
             connection.commit()
         self._save_memory_state(payload.get("long_term_memory"), payload.get("user_long_term_memories"))
 
+    def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation = self.get_conversation(conversation_id)
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM chats WHERE id = %s", (conversation_id,))
+            connection.commit()
+        return conversation
+
     def _load_memory_state(self) -> dict[str, Any]:
         if not self.path.exists():
             return {"long_term_memory": default_long_term_memory(), "user_long_term_memories": {}}

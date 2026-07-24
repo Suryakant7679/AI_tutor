@@ -64,7 +64,9 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  height: 100vh;
   min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar-top,
@@ -134,16 +136,117 @@ button.secondary {
 }
 
 #conversation-list {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
+  padding: 0 2px 8px 0;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+#conversation-list .conversation-item {
+  flex: 0 0 36px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 36px;
+}
+
+#conversation-list .secondary {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  max-height: 36px;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 20px;
+  padding-right: 34px;
+}
+
+#conversation-list .secondary.active {
+  background: var(--panel-2);
+}
+
+.conversation-menu-button {
+  position: absolute;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, transparent, var(--sidebar) 30%);
+  color: var(--muted);
+  opacity: 0;
+}
+
+.conversation-item:hover .conversation-menu-button,
+.conversation-item:focus-within .conversation-menu-button,
+.conversation-item.menu-open .conversation-menu-button {
+  opacity: 1;
+}
+
+.conversation-menu {
+  position: absolute;
+  z-index: 8;
+  inset: 0 0 0 auto;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: -12px 0 20px rgb(0 0 0 / 28%);
+}
+
+.conversation-item.menu-open .conversation-menu {
+  display: flex;
+}
+
+.conversation-item.menu-open .conversation-menu-button {
+  display: none;
+}
+
+.conversation-menu button {
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.conversation-menu button:hover {
+  background: var(--panel-2);
+}
+
+.conversation-menu .danger-menu-item {
+  color: var(--danger);
+}
+
+#conversation-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+#conversation-list::-webkit-scrollbar-thumb {
+  background: var(--soft);
+  border: 2px solid var(--sidebar);
+  border-radius: 999px;
+}
+
+#conversation-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .sidebar-footer {
   margin-top: auto;
+  flex: 0 0 auto;
   border-top: 1px solid var(--line);
   padding: 10px 6px 2px;
   display: flex;

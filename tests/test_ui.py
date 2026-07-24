@@ -21,6 +21,20 @@ class ChatInterfaceTests(unittest.TestCase):
         self.assertIn("/api/v1/conversations/search", javascript)
         self.assertIn("renderChatSearchResults", javascript)
 
+    def test_recent_chat_history_is_scrollable_and_rows_do_not_overlap(self) -> None:
+        stylesheet = (ROOT / "web" / "styles.css").read_text(encoding="utf-8")
+        javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("#conversation-list .secondary", stylesheet)
+        self.assertIn("#conversation-list .conversation-item", stylesheet)
+        self.assertIn("flex: 0 0 36px", stylesheet)
+        self.assertIn("text-overflow: ellipsis", stylesheet)
+        self.assertIn("overflow-y: auto", stylesheet)
+        self.assertIn("button.title = title", javascript)
+        self.assertIn('button.classList.toggle("active"', javascript)
+        self.assertIn('data-action="rename"', javascript)
+        self.assertIn('data-action="delete"', javascript)
+        self.assertIn('method: "PATCH"', javascript)
+        self.assertIn('method: "DELETE"', javascript)
 
 if __name__ == "__main__":
     unittest.main()

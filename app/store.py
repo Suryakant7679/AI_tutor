@@ -272,6 +272,28 @@ class ConversationStore:
         payload = self._load()
         return self._find(payload, conversation_id)
 
+    def rename_conversation(self, conversation_id: str, title: str) -> dict[str, Any]:
+        normalized = str(title).strip()
+        if not normalized:
+            raise ValueError("Conversation title is required")
+        if len(normalized) > 120:
+            raise ValueError("Conversation title must be 120 characters or fewer")
+        payload = self._load()
+        conversation = self._find(payload, conversation_id)
+        conversation["title"] = normalized
+        conversation["updated_at"] = utc_now()
+        self._save(payload)
+        return conversation
+
+    def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
+        payload = self._load()
+        conversation = self._find(payload, conversation_id)
+        payload["conversations"] = [
+            item for item in payload["conversations"] if item["id"] != conversation_id
+        ]
+        self._save(payload)
+        return conversation
+
     def set_recovery_state(self, conversation_id: str, recovery_state: dict[str, Any]) -> dict[str, Any]:
         payload = self._load()
         conversation = self._find(payload, conversation_id)

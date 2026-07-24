@@ -205,6 +205,26 @@ class GatewayHTTPIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(error["error"]["code"], "forbidden")
 
+    def test_conversation_owner_can_rename_and_delete_chat(self) -> None:
+        first = self.register("mutate-one@example.com")
+        second = self.register("mutate-two@example.com")
+        _, _, conversation = self.request("POST", "/api/v1/conversations", {}, first["access_token"])
+        path = f"/api/v1/conversations/{conversation['id']}"
+
+        status, _, error = self.request("PATCH", path, {"title": "Not allowed"}, second["access_token"])
+        self.assertEqual(status, 403)
+        self.assertEqual(error["error"]["code"], "forbidden")
+
+        status, _, renamed = self.request("PATCH", path, {"title": "Renamed study chat"}, first["access_token"])
+        self.assertEqual(status, 200)
+        self.assertEqual(renamed["conversation"]["title"], "Renamed study chat")
+
+        status, _, deleted = self.request("DELETE", path, token=first["access_token"])
+        self.assertEqual(status, 200)
+        self.assertTrue(deleted["deleted"])
+        status, _, error = self.request("GET", path, token=first["access_token"])
+        self.assertEqual(status, 404)
+
     def test_semantic_chat_search_is_scoped_to_authenticated_user(self) -> None:
         first = self.register("search-one@example.com")
         second = self.register("search-two@example.com")

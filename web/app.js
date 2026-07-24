@@ -355,14 +355,89 @@ async function loadConversations() {
   conversationList.innerHTML = "";
 
   conversations.forEach((conversation) => {
+    const item = document.createElement("div");
+    item.className = "conversation-item";
     const button = document.createElement("button");
     button.className = "secondary";
-    button.textContent = conversation.title;
+    const title = String(conversation.title || "New chat").trim() || "New chat";
+    button.textContent = title;
+    button.title = title;
+    button.dataset.conversationId = conversation.id;
+    button.classList.toggle("active", conversation.id === activeConversationId);
+    button.setAttribute("aria-current", conversation.id === activeConversationId ? "page" : "false");
     button.addEventListener("click", () => openConversation(conversation.id));
-    conversationList.appendChild(button);
+
+    const menuButton = document.createElement("button");
+    menuButton.className = "conversation-menu-button";
+    menuButton.type = "button";
+    menuButton.textContent = "•••";
+    menuButton.title = "Actions for " + title;
+    menuButton.setAttribute("aria-label", "Actions for " + title);
+    menuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const willOpen = !item.classList.contains("menu-open");
+      closeConversationMenus();
+      item.classList.toggle("menu-open", willOpen);
+    });
+
+    const menu = document.createElement("div");
+    menu.className = "conversation-menu";
+    menu.innerHTML = '<button type="button" data-action="rename">Rename</button><button type="button" data-action="delete" class="danger-menu-item">Delete</button>';
+    menu.querySelector('[data-action="rename"]').addEventListener("click", () => renameConversation(conversation));
+    menu.querySelector('[data-action="delete"]').addEventListener("click", () => deleteConversation(conversation));
+    item.append(button, menuButton, menu);
+    conversationList.appendChild(item);
   });
   return conversations;
 }
+
+function closeConversationMenus() {
+  conversationList.querySelectorAll(".conversation-item.menu-open").forEach((item) => item.classList.remove("menu-open"));
+}
+
+async function renameConversation(conversation) {
+  closeConversationMenus();
+  const title = window.prompt("Rename chat", conversation.title || "New chat");
+  if (title === null) return;
+  const normalized = title.trim();
+  if (!normalized) {
+    notify("Rename failed", "Chat name cannot be empty.");
+    return;
+  }
+  const response = await authenticatedFetch("/api/v1/conversations/" + conversation.id, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: normalized }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    notify("Rename failed", shortError(payload.error || "Could not rename chat."));
+    return;
+  }
+  await loadConversations();
+}
+
+async function deleteConversation(conversation) {
+  closeConversationMenus();
+  if (!window.confirm('Delete "' + (conversation.title || "New chat") + '"? This cannot be undone.')) return;
+  const response = await authenticatedFetch("/api/v1/conversations/" + conversation.id, { method: "DELETE" });
+  const payload = await response.json();
+  if (!response.ok) {
+    notify("Delete failed", shortError(payload.error || "Could not delete chat."));
+    return;
+  }
+  if (activeConversationId === conversation.id) {
+    setActiveConversation(null);
+    setActiveThread("main");
+    messages.innerHTML = "";
+    updateEmptyState();
+  }
+  await loadConversations();
+}
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".conversation-item")) closeConversationMenus();
+});
 
 async function openConversation(id) {
   const response = await authenticatedFetch(`/api/v1/conversations/${id}`);
@@ -372,6 +447,11 @@ async function openConversation(id) {
   }
   const conversation = await response.json();
   setActiveConversation(id);
+  conversationList.querySelectorAll("[data-conversation-id]").forEach((button) => {
+    const isActive = button.dataset.conversationId === id;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-current", isActive ? "page" : "false");
+  });
   setActiveThread(activeThreadId || conversation.active_thread_id || "main");
   localStorage.removeItem(ACTIVE_STREAM_KEY);
   messages.innerHTML = "";
