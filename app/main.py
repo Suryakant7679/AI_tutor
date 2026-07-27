@@ -2466,7 +2466,7 @@ def iter_stream_chunks(chunks: Iterator[str] | list[str], chunk_size: int = 8) -
 
 def main() -> None:
     host = os.getenv("AIOS_HOST", "127.0.0.1")
-    port = int(os.getenv("AIOS_PORT", "8000"))
+    port = int(os.getenv("AIOS_PORT") or os.getenv("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), AIOSHandler)
     print(f"AIOS starter running at http://{host}:{port}")
     server.serve_forever()
