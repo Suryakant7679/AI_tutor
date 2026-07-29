@@ -13,7 +13,7 @@ from app.usage import UsageTracker
 from app.migrate import migration_files
 from app.postgres_store import PostgreSQLConversationStore
 from app.storage import create_store
-from app.redis_state import RedisState
+from app.redis_state import NullRedisState, RedisState, create_redis_state
 from app.vector_store import JsonVectorStore, QdrantVectorStore
 from app.mcp.filesystem_tools import WorkspaceFilesystem
 from app.mcp.python_tools import python_package_info, run_restricted_python
@@ -286,6 +286,11 @@ class _FakeRedis:
 
 
 class RedisStateTests(unittest.TestCase):
+    def test_invalid_managed_redis_url_falls_back_without_crashing(self) -> None:
+        with mock.patch.dict(os.environ, {"REDIS_URL": "https://example.upstash.io"}, clear=False):
+            state = create_redis_state()
+        self.assertIsInstance(state, NullRedisState)
+
     def test_active_sessions_use_namespaced_json_and_ttl(self) -> None:
         client = _FakeRedis()
         state = RedisState(client, "test")

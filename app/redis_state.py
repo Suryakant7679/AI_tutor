@@ -305,5 +305,12 @@ def create_redis_state() -> RedisState | NullRedisState:
     url = os.getenv("REDIS_URL", "").strip()
     if not url:
         return NullRedisState()
-    state = RedisState.from_url(url, os.getenv("AIOS_REDIS_NAMESPACE", "aios"))
-    return state if state.ping() else NullRedisState()
+    try:
+        state = RedisState.from_url(url, os.getenv("AIOS_REDIS_NAMESPACE", "aios"))
+        return state if state.ping() else NullRedisState()
+    except Exception as exc:
+        # Redis improves shared state, queues, and rate limiting, but it must not
+        # prevent the public web process from starting when a managed Redis URL
+        # is temporarily unavailable or configured incorrectly.
+        print(f"Redis unavailable; using in-memory fallback: {exc}")
+        return NullRedisState()
