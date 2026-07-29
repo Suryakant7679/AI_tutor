@@ -18,3 +18,4 @@ data/worker_state/
 .env.production
 deploy/certs/*.pem
 deployment-backups/
+.vercel
