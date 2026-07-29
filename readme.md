@@ -131,7 +131,7 @@ AI_tutor/
   data/
     .gitkeep         keeps the data folder in Git
   docs/
-    plan.md          checkpoint roadmap
+    DEPLOYMENT.md    live deployment configuration
   tests/
     test_main.py     regression tests
   web/
@@ -180,19 +180,21 @@ Streaming chat responses use newline-delimited JSON events:
 
 ## Deployment
 
-A production Compose stack is included for PostgreSQL, Redis, Qdrant, API/UI,
-workers, scheduler, monitoring, Nginx HTTPS, and optional Cloudflare Tunnel.
-Start by copying `.env.production.example` to the Git-ignored
-`.env.production`, generating or installing TLS certificates, then run:
+The live application uses a static Vercel frontend and a Docker-based Render
+backend connected to Supabase PostgreSQL, Qdrant Cloud, and optional Upstash
+Redis.
 
-```powershell
-$env:AIOS_ENV_FILE=".env.production"
-docker compose --env-file .env.production up -d --build
-```
+- Application: https://ai-tutor-eta-ochre.vercel.app
+- Backend health: https://ai-tutor-backend-gc7m.onrender.com/api/health
 
-Use `scripts/backup.ps1` and `scripts/restore.ps1` for PostgreSQL plus
-application-data disaster recovery. See `SETUP.md` for certificate, tunnel,
-security, validation, and recovery details.
+Vercel deploys only `web/` and proxies `/api/*` to Render. Render builds the root
+`Dockerfile`; the application applies PostgreSQL migrations idempotently during
+startup. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for configuration and
+verification details.
+
+Docker Compose remains supported for local development, workers, and recovery
+testing; it is not an additional public deployment target.
+
 ## Testing
 
 Run the Python test suite:
@@ -206,25 +208,6 @@ Optional frontend syntax check:
 ```powershell
 node --check web/app.js
 ```
-
-## Roadmap
-
-The active roadmap lives in [docs/plan.md](docs/plan.md).
-
-Current completed checkpoints:
-
-- Checkpoint 1: Local Chat Starter
-- Checkpoint 2: LLM Provider Layer
-- Checkpoint 3: Streaming Engine
-
-Next major areas:
-
-- Frontend uploads and syntax highlighting
-- Session and workspace tracking
-- Memory and semantic search
-- RAG pipeline
-- Tool routing and agent orchestration
-- Deployment with Docker, databases, and monitoring
 
 ## Notes
 

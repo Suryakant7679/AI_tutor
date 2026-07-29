@@ -1,88 +1,58 @@
-# Free public deployment
+# Live deployment
 
-> Deployment status: **PENDING**. Repository preparation is complete, but no Vercel, Koyeb, Supabase, Upstash, Qdrant, or model-provider deployment has been created yet.
+Status: **LIVE**
 
-## Details to collect before deployment
+## Public endpoints
 
-Keep these values in a password manager or the provider dashboards; never commit them:
+- Frontend: https://ai-tutor-eta-ochre.vercel.app
+- Render backend: https://ai-tutor-backend-gc7m.onrender.com
+- Proxied health check: https://ai-tutor-eta-ochre.vercel.app/api/health
+- Source: https://github.com/Suryakant7679/AI_tutor/tree/main
 
-- `DATABASE_URL`: Supabase Session pooler PostgreSQL URI
-- `REDIS_URL`: Upstash TLS URI beginning with `rediss://`
-- `QDRANT_URL` and `QDRANT_API_KEY`: Qdrant Cloud cluster credentials
-- One model credential: `GROQ_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`
-- `AIOS_ADMIN_EMAILS`: your administrator email address
-- `AIOS_JWT_SECRET`: a new random secret of at least 32 bytes
-- Koyeb public hostname: available only after backend deployment
-- Vercel public hostname: available only after frontend deployment
+## Architecture
 
-## Pending checklist
+- Vercel serves the static `web/` directory.
+- `web/vercel.json` proxies `/api/*` to Render.
+- Render builds the root `Dockerfile` and runs the Python HTTP service.
+- Supabase Session Pooler provides PostgreSQL on port 5432 with SSL.
+- Qdrant Cloud stores vectors.
+- Upstash Redis provides shared ephemeral state when its `rediss://` URI is valid.
+- Gemini is the primary model provider; Groq can remain configured as fallback.
 
-- [x] Prepare a single-service Koyeb Docker image
-- [x] Add automatic PostgreSQL migrations
-- [x] Add a safe production environment template
-- [x] Add Vercel API proxy configuration
-- [x] Validate application tests and configuration
-- [ ] Create Supabase, Upstash, and Qdrant free projects
-- [ ] Create the model-provider API key
-- [ ] Deploy the Koyeb backend and verify `/api/health`
-- [ ] Replace the Koyeb placeholder in `web/vercel.json`
-- [ ] Deploy the Vercel frontend
-- [ ] Complete private-browser and small-group testing
-This setup targets 100–200 registered users with light traffic, not 100–200 simultaneous users.
+## Render environment
 
-## Services
+Copy the keys from `.env.render.example` into Render Environment settings. Keep
+all values secret. The critical managed-service values are:
 
-- Vercel: static `web/` frontend
-- Koyeb: one Web Service using `Dockerfile.koyeb`
-- Supabase: PostgreSQL
-- Upstash: Redis
-- Qdrant Cloud: vectors
-- Groq or Gemini: model API
-
-Separate workers are omitted because Koyeb Free cannot run Worker Services. Normal chat, authentication, PostgreSQL conversation storage, Redis rate limiting, streaming, and vector access run in the web service. Deferred background jobs do not run.
-
-## Create the managed services
-
-Create free Supabase, Upstash Redis, and Qdrant Cloud projects, preferably in nearby regions. Copy the Supabase Session pooler PostgreSQL URI, the Upstash `rediss://` URI, and the Qdrant HTTPS URL and API key.
-
-## Push the repository
-
-Push the project to GitHub or another Koyeb/Vercel-supported Git provider. Never commit `.env`, `.env.production`, passwords, or API keys.
-
-## Deploy Koyeb
-
-Create a Koyeb Web Service from the repository:
-
-- Builder: Dockerfile
-- Dockerfile: `Dockerfile.koyeb`
-- Instance: Free
-- Port: `8000`
-- Health path: `/api/health`
-
-Copy the values from `.env.free-tier.example` into Koyeb Environment Variables. Generate the JWT secret locally with:
-
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+```text
+DATABASE_URL=postgresql://...pooler.supabase.com:5432/postgres?sslmode=require
+REDIS_URL=rediss://...
+QDRANT_URL=https://...
+QDRANT_API_KEY=...
+GEMINI_API_KEY=...
+AIOS_ADMIN_EMAILS=...
+AIOS_JWT_SECRET=...
 ```
 
-The container automatically runs PostgreSQL migrations before starting. After it becomes healthy, copy its `https://...koyeb.app` address and test `/api/health`.
+The application runs database migrations during startup. An invalid Redis URL
+no longer prevents startup, but health reports `redis: unavailable` and shared
+rate limiting/stream state falls back to the single Render process.
 
-## Deploy Vercel
+## Verification
 
-In `web/vercel.json`, replace `https://REPLACE-WITH-YOUR-KOYEB-HOST.koyeb.app` with the exact Koyeb address without a trailing slash. Commit and push it.
+```text
+GET https://ai-tutor-backend-gc7m.onrender.com/api/health
+GET https://ai-tutor-eta-ochre.vercel.app/api/health
+```
 
-Create a Vercel project with:
+Both should return HTTP 200. An invalid login should return HTTP 401, confirming
+that Vercel proxying, Render, and Supabase queries are working.
 
-- Root directory: `web`
-- Framework preset: Other
-- Build command: empty
-- Output directory: `.`
+## Free-tier behavior
 
-Deploy, open the Vercel URL in a private window, register, log in, send a message, reload, and confirm the conversation remains.
-
-## Limitations
-
-- Koyeb sleeps after inactivity, causing a cold start.
-- Uploads and other files under `data/` are temporary and disappear on redeployment.
-- Supabase, Upstash, Qdrant, and the AI provider each impose free quotas.
-- Invite a small test group before publishing broadly.
+- Render sleeps after inactivity and can take about a minute to wake.
+- Render local files and uploads are ephemeral.
+- Vercel, Render, Supabase, Qdrant, Upstash, and model providers enforce their
+  own free quotas.
+- This configuration targets light use by roughly 100-200 registered users, not
+  100-200 simultaneous chats.

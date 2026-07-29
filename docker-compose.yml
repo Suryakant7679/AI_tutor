@@ -118,18 +118,6 @@ services:
       retries: 3
     networks: [edge]
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    profiles: ["tunnel"]
-    env_file:
-      - ${AIOS_ENV_FILE:-.env.production}
-    command: ["tunnel", "--no-autoupdate", "run"]
-    restart: unless-stopped
-    depends_on:
-      nginx:
-        condition: service_healthy
-    networks: [edge]
-
 volumes:
   postgres_data:
   redis_data:

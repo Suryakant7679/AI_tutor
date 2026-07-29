@@ -68,11 +68,12 @@ class DeploymentConfigurationTests(unittest.TestCase):
 
     def test_compose_contains_complete_checkpoint_stack(self) -> None:
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        for service in ("postgres", "redis", "qdrant", "migrate", "app", "worker", "scheduler", "monitoring", "nginx", "cloudflared"):
+        for service in ("postgres", "redis", "qdrant", "migrate", "app", "worker", "scheduler", "monitoring", "nginx"):
             self.assertIn(f"  {service}:", compose)
         self.assertIn("service_completed_successfully", compose)
-        self.assertIn('profiles: ["tunnel"]', compose)
         self.assertIn("internal: true", compose)
+        self.assertNotIn("cloudflared", compose)
+        self.assertNotIn("quick-tunnel", compose)
 
     def test_nginx_enforces_https_and_proxies_api_streams(self) -> None:
         nginx = (ROOT / "deploy" / "nginx.conf").read_text(encoding="utf-8")
