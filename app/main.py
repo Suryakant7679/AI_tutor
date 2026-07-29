@@ -2465,6 +2465,13 @@ def iter_stream_chunks(chunks: Iterator[str] | list[str], chunk_size: int = 8) -
 
 
 def main() -> None:
+    storage_backend = os.getenv("AIOS_STORAGE_BACKEND", "auto").strip().lower()
+    if storage_backend == "postgres" or (storage_backend == "auto" and os.getenv("DATABASE_URL", "").strip()):
+        try:
+            from app.migrate import run_migrations
+        except ModuleNotFoundError:
+            from migrate import run_migrations
+        run_migrations()
     host = os.getenv("AIOS_HOST", "127.0.0.1")
     port = int(os.getenv("AIOS_PORT") or os.getenv("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), AIOSHandler)
