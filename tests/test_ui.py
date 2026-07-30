@@ -21,6 +21,19 @@ class ChatInterfaceTests(unittest.TestCase):
         self.assertIn("/api/v1/conversations/search", javascript)
         self.assertIn("renderChatSearchResults", javascript)
 
+    def test_authentication_ui_gates_boot_and_stores_bearer_token(self) -> None:
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="auth-dialog"', html)
+        self.assertIn('data-auth-mode="login"', html)
+        self.assertIn('data-auth-mode="register"', html)
+        self.assertIn('/api/v1/auth/me', javascript)
+        self.assertIn('/api/v1/auth/${mode}', javascript)
+        self.assertIn('localStorage.setItem("aios-access-token"', javascript)
+        boot = javascript.split("async function boot()", 1)[1].split("\n}\n\nboot();", 1)[0]
+        self.assertIn("await ensureAuthenticated()", boot)
+        self.assertLess(boot.index("await ensureAuthenticated()"), boot.index("await ensureSession()"))
+
     def test_recent_chat_history_is_scrollable_and_rows_do_not_overlap(self) -> None:
         stylesheet = (ROOT / "web" / "styles.css").read_text(encoding="utf-8")
         javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")

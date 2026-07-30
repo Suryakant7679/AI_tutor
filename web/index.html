@@ -22,7 +22,11 @@
     <main class="chat">
       <header class="topbar">
         <div class="model-title">AI Tutor</div>
+        <div class="topbar-actions">
+          <span id="account-label" class="account-label" hidden></span>
+          <button id="sign-out" class="ghost account-action" type="button" hidden>Sign out</button>
         <button id="tools-toggle" class="icon-button" type="button" aria-label="Open workspace tools">⚙</button>
+        </div>
       </header>
 
       <section class="chat-stage">
@@ -46,6 +50,22 @@
         </form>
       </section>
     </main>
+
+    <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
+      <div class="auth-brand">A</div>
+      <h2 id="auth-title">Welcome to AI Tutor</h2>
+      <p>Sign in to continue, or create an account if this is your first visit.</p>
+      <form id="auth-form" class="auth-form">
+        <label><span>Name <small>(required for new accounts)</small></span><input id="auth-name" type="text" autocomplete="name" maxlength="120" placeholder="Your name" /></label>
+        <label><span>Email</span><input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com" /></label>
+        <label><span>Password</span><input id="auth-password" type="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters" /></label>
+        <p id="auth-status" class="auth-status" role="alert" aria-live="polite"></p>
+        <div class="auth-actions">
+          <button id="sign-in" type="submit" data-auth-mode="login">Sign in</button>
+          <button id="create-account" class="ghost" type="submit" data-auth-mode="register">Create account</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="chat-search-dialog" class="chat-search-dialog" aria-labelledby="chat-search-title">
       <div class="search-dialog-heading">
