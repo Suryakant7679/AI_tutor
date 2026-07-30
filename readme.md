@@ -21,7 +21,6 @@ The current production stack is:
 
 ## Current features
 
-- Email registration and Bearer-token authentication
 - User-scoped conversations and chat history
 - Streaming assistant responses with cancellation and recovery
 - PDF and text uploads with extracted document context
@@ -158,18 +157,11 @@ Add the environment variables above, then deploy. New commits to `main` automati
 
 ## API overview
 
-All routes use the `/api/v1` prefix. Authentication-protected requests require:
-
-```http
-Authorization: Bearer YOUR_ACCESS_TOKEN
-```
+All routes use the `/api/v1` prefix.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | Service, provider, and Redis status |
-| `POST` | `/api/v1/auth/register` | Create an account |
-| `POST` | `/api/v1/auth/login` | Sign in and receive a token |
-| `GET` | `/api/v1/auth/me` | Return the authenticated user |
 | `GET/POST` | `/api/v1/conversations` | List or create conversations |
 | `POST` | `/api/v1/chat` | Send a normal or streaming chat request |
 | `GET/POST` | `/api/v1/uploads` | List or upload artifacts |
