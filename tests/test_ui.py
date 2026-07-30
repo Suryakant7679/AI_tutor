@@ -60,5 +60,20 @@ class ChatInterfaceTests(unittest.TestCase):
         self.assertNotIn("sidebar-footer", html)
         self.assertNotIn("<strong>Surya</strong>", html)
 
+    def test_attachment_context_is_hidden_and_sent_by_artifact_id(self) -> None:
+        javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("artifact_ids: uploadedArtifacts.map", javascript)
+        self.assertIn("message: content", javascript)
+        self.assertNotIn("buildChatContent", javascript)
+        self.assertNotIn("Extracted text preview:", javascript)
+
+    def test_latex_math_is_rendered_with_katex(self) -> None:
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("katex.min.css", html)
+        self.assertIn("katex.min.js", html)
+        self.assertIn("window.katex?.renderToString", javascript)
+        self.assertIn("protectMath(expression, true", javascript)
+
 if __name__ == "__main__":
     unittest.main()

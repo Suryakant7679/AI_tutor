@@ -300,7 +300,6 @@ form.addEventListener("submit", async (event) => {
       notify("Uploads ready", `${uploadedArtifacts.length} artifact(s) attached to this message.`);
       await loadArtifacts();
     }
-    const enrichedContent = buildChatContent(content, uploadedArtifacts);
     const response = await authenticatedFetch("/api/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -309,7 +308,7 @@ form.addEventListener("submit", async (event) => {
         conversation_id: activeConversationId,
         thread_id: activeThreadId,
         artifact_ids: uploadedArtifacts.map((artifact) => artifact.id),
-        message: enrichedContent,
+        message: content,
         stream: true,
       }),
       signal: streamController.signal,
@@ -674,12 +673,19 @@ function processingHtml(role, status) {
 
 function renderMarkdown(value) {
   const blocks = [];
-  let escaped = escapeHtml(value || "").replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, language, code) => {
+  const mathBlocks = [];
+  let source = String(value || "").replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, language, code) => {
     const token = `@@CODE${blocks.length}@@`;
     blocks.push(`<pre><code data-language="${escapeHtml(language || "text")}">${highlightCode(code.trim(), language || "")}</code></pre>`);
     return token;
   });
+  source = source
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, expression) => protectMath(expression, true, mathBlocks))
+    .replace(/\$\$([\s\S]*?)\$\$/g, (_, expression) => protectMath(expression, true, mathBlocks))
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, expression) => protectMath(expression, false, mathBlocks))
+    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_, prefix, expression) => `${prefix}${protectMath(expression, false, mathBlocks)}`);
 
+  let escaped = escapeHtml(source);
   escaped = escaped
     .replace(/^### (.*)$/gm, "<h3>$1</h3>")
     .replace(/^## (.*)$/gm, "<h2>$1</h2>")
@@ -698,7 +704,35 @@ function renderMarkdown(value) {
   blocks.forEach((html, index) => {
     escaped = escaped.replace(`@@CODE${index}@@`, html);
   });
+  mathBlocks.forEach((html, index) => {
+    escaped = escaped.replace(`@@MATH${index}@@`, html);
+  });
   return escaped;
+}
+
+function protectMath(expression, displayMode, mathBlocks) {
+  const token = `@@MATH${mathBlocks.length}@@`;
+  mathBlocks.push(renderMath(expression, displayMode));
+  return token;
+}
+
+function renderMath(expression, displayMode = false) {
+  const latex = String(expression || "").trim();
+  if (!latex) return "";
+  if (window.katex?.renderToString) {
+    try {
+      return window.katex.renderToString(latex, {
+        displayMode,
+        throwOnError: false,
+        strict: "ignore",
+        output: "html",
+      });
+    } catch (_error) {
+      // Fall through to a readable escaped formula if KaTeX rejects the input.
+    }
+  }
+  const tag = displayMode ? "div" : "span";
+  return `<${tag} class="math-fallback">${escapeHtml(latex)}</${tag}>`;
 }
 
 function highlightCode(code, language) {
@@ -762,31 +796,6 @@ async function uploadFiles(files) {
     throw new Error(shortError(payload.error || "Upload failed."));
   }
   return payload.artifacts || [];
-}
-
-function buildChatContent(content, artifacts) {
-  if (!artifacts.length) {
-    return content;
-  }
-  const summary = artifacts
-    .map((item) => {
-      const textPreview = item.cleaned_text || item.extracted_text || item.preview || "";
-      const metadata = item.metadata || {};
-      const chunkCount = metadata.chunk_count || (item.chunks ? item.chunks.length : 0);
-      const details = [
-        item.category,
-        formatBytes(item.size || 0),
-        item.ocr_status ? `ocr=${item.ocr_status}` : "",
-        chunkCount ? `chunks=${chunkCount}` : "",
-      ].filter(Boolean);
-      const extraction =
-        textPreview
-          ? `\nExtracted text preview:\n${textPreview.slice(0, 1200)}`
-          : "\nExtraction note: No text was extracted from this attachment. If it is an image or scanned file, OCR or vision support is required to summarize visual content.";
-      return `- ${item.filename} (${details.join(", ")})${extraction}`;
-    })
-    .join("\n");
-  return `${content}\n\nAttached artifacts:\n${summary}`;
 }
 
 async function loadArtifacts() {
