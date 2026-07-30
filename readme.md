@@ -1,216 +1,226 @@
 # AI Tutor
 
-AI Tutor is a local AI chat workspace with a browser UI, persistent conversations, streaming model responses, speech controls, and multi-provider LLM support.
+AI Tutor is a deployed, multi-user chatbot for conversational learning, document Q&A, and mathematical explanations. It provides authenticated chat, streaming responses, PDF/text extraction, retrieval-backed context, and rendered LaTeX equations.
 
-The project is currently a clean starter version of a larger AIOS architecture. It is intentionally small, dependency-light, and easy to run locally while future checkpoints add memory, RAG, tools, agents, and deployment infrastructure.
+## Live application
 
-## Highlights
+- Frontend: https://ai-tutor-eta-ochre.vercel.app
+- Backend: https://ai-tutor-backend-gc7m.onrender.com
+- Health check: https://ai-tutor-eta-ochre.vercel.app/api/v1/health
 
-- Local browser chat UI with sidebar conversation history
-- Multi-chat support with local JSON persistence
-- Streaming assistant responses over NDJSON
-- Live Markdown rendering while responses stream
-- Stream cancellation and interrupted-stream recovery
-- Browser speech-to-text input and text-to-speech output
-- Provider fallback across Groq, Gemini, OpenAI, and DeepSeek
-- Task-aware model routing for coding, reasoning, vision, math, research, and general chat
-- Local provider usage and configurable cost estimation at `/api/usage`
-- Qdrant storage for document, memory, code, and conversation embeddings
-- Dependency-free Python backend using the standard library
-- Regression tests for parsing, streaming, and provider behavior
+The current production stack is:
 
-## Quick Start
+| Component | Service |
+| --- | --- |
+| Static frontend | Vercel |
+| Python backend | Render (Docker) |
+| Relational database | Supabase PostgreSQL |
+| Shared state and rate limiting | Upstash Redis |
+| Vector database | Qdrant Cloud |
+| AI providers | Gemini, Groq, OpenAI, or DeepSeek |
 
-Clone the repo and enter the project:
+## Current features
+
+- Email registration and Bearer-token authentication
+- User-scoped conversations and chat history
+- Streaming assistant responses with cancellation and recovery
+- PDF and text uploads with extracted document context
+- Hidden attachment context: extracted PDF text is not displayed as the user's prompt
+- Retrieval-backed document and conversation context through Qdrant
+- Mathematical answers rendered with KaTeX/LaTeX
+- Markdown, syntax-highlighted code, speech input, and text-to-speech
+- Multiple AI providers with automatic fallback and task-aware routing
+- Redis-backed sessions, caching, rate limits, and stream state
+- PostgreSQL migrations and durable user/chat storage
+- Health, usage, search, planning, orchestration, and observability APIs
+
+## How deployment works
+
+```text
+Browser
+   |
+   v
+Vercel (web/)
+   |  /api/* proxy
+   v
+Render (Docker/Python)
+   |---- Supabase PostgreSQL
+   |---- Upstash Redis
+   |---- Qdrant Cloud
+   `---- Configured AI provider
+```
+
+Vercel deploys the `web/` directory. Its `vercel.json` forwards API requests to the Render backend. Render builds the root `Dockerfile`, starts `python -m app.main`, and applies PostgreSQL migrations during startup.
+
+## Local development
+
+Requirements:
+
+- Python 3.12+
+- Node.js only for the optional JavaScript syntax check
+- At least one supported AI provider key
+
+Clone and configure the project:
 
 ```powershell
 git clone https://github.com/Suryakant7679/AI_tutor.git
 cd AI_tutor
-```
-
-Create your local environment file:
-
-```powershell
 Copy-Item .env.example .env
+python -m pip install -r requirements.txt
 ```
 
-Add at least one API key to `.env`:
+Add at least one provider key to `.env`:
 
-```text
+```dotenv
 AIOS_PROVIDER=auto
-GROQ_API_KEY=your_key_here
+GROQ_API_KEY=your_key
 GEMINI_API_KEY=
 OPENAI_API_KEY=
 DEEPSEEK_API_KEY=
 ```
 
-Run the app:
+Start the application:
 
 ```powershell
-python app/main.py
+python -m app.main
 ```
 
-Open the chat UI:
+Open http://127.0.0.1:8000. The local health endpoint is http://127.0.0.1:8000/api/v1/health.
 
-```text
-http://127.0.0.1:8000
+## Production environment variables
+
+Add production secrets in **Render ? Web Service ? Environment**. Do not commit real credentials to GitHub.
+
+Required infrastructure values:
+
+```dotenv
+AIOS_HOST=0.0.0.0
+AIOS_STORAGE_BACKEND=postgres
+AIOS_VECTOR_BACKEND=qdrant
+AIOS_AUTH_REQUIRED=true
+
+DATABASE_URL=postgresql://USER:URL_ENCODED_PASSWORD@SUPABASE_POOLER_HOST:5432/postgres?sslmode=require
+REDIS_URL=rediss://default:PASSWORD@UPSTASH_HOST:6379
+QDRANT_URL=https://YOUR_QDRANT_CLUSTER
+QDRANT_API_KEY=your_qdrant_api_key
+QDRANT_COLLECTION=aios_embeddings
+
+AIOS_JWT_SECRET=generate_at_least_32_random_bytes
+AIOS_ADMIN_EMAILS=your_email@example.com
 ```
 
-Health check:
+Configure at least one model provider:
 
-```text
-http://127.0.0.1:8000/api/health
+```dotenv
+AIOS_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_key
+AIOS_GEMINI_MODEL=gemini-2.5-flash
+
+# Optional fallback
+GROQ_API_KEY=your_groq_key
+AIOS_GROQ_MODEL=openai/gpt-oss-20b
 ```
 
-## Configuration
+Important connection formats:
 
-The app loads `.env` on startup. Restart the server after changing provider keys or model names.
+- Supabase: use the Session Pooler URI and append `?sslmode=require`. URL-encode reserved characters in the password.
+- Upstash: use the Redis TLS URI beginning with `rediss://`, not the REST URL and not the complete `redis-cli` command.
+- Qdrant: use the HTTPS cluster URL and its API key.
 
-| Variable | Purpose |
+A complete safe template is available in `.env.render.example`.
+
+## Vercel configuration
+
+Create a Vercel project from this repository using:
+
+| Setting | Value |
 | --- | --- |
-| `AIOS_HOST` | Local host for the server. Defaults to `127.0.0.1`. |
-| `AIOS_PORT` | Local port for the server. Defaults to `8000`. |
-| `AIOS_DATA_FILE` | Legacy/local JSON conversation path. |
-| `AIOS_STORAGE_BACKEND` | `auto`, `postgres`, or `json`; auto selects PostgreSQL when configured. |
-| `DATABASE_URL` | PostgreSQL connection URL for runtime session/chat storage. |
-| `AIOS_AUTH_REQUIRED` | Require a valid Bearer JWT for protected API routes. Defaults to `false` for local compatibility. |
-| `AIOS_JWT_SECRET` | Production JWT signing secret; must contain at least 32 bytes. Blank uses a durable local secret. |
-| `AIOS_JWT_TTL` | Access-token lifetime in seconds. Defaults to `3600`. |
-| `AIOS_ADMIN_EMAILS` | Comma-separated emails granted the admin role at registration. |
-| `AIOS_API_RATE_LIMIT` | Maximum gateway requests per rate window and identity. Defaults to `120`. |
-| `AIOS_API_RATE_WINDOW` | Gateway rate-limit window in seconds. Defaults to `60`. |
-| `AIOS_GATEWAY_DATA_FILE` | Durable local users, JWT secret, and analytics file. With PostgreSQL, only the generated JWT secret remains local. |
-| `AIOS_PROVIDER` | Provider mode: `auto`, `groq`, `gemini`, `openai`, or `deepseek`. |
-| `AIOS_DEFAULT_MODEL` | Optional model override used when provider-specific values are blank. |
-| `AIOS_TEMPERATURE` | Model temperature. |
-| `AIOS_LLM_TIMEOUT` | Provider request timeout in seconds. |
-| `AIOS_LLM_RETRIES` | Retry count for non-streaming calls. |
-| `AIOS_USAGE_FILE` | JSON usage ledger. Defaults to `data/llm_usage.json`. |
-| `AIOS_OBSERVABILITY_FILE` | Durable model, tool, worker, and error event ledger. |
-| `AIOS_OBSERVABILITY_MAX_EVENTS` | Maximum retained observability events. Defaults to `10000`. |
-| `AIOS_ENABLED_VALIDATORS` | Optional comma-separated allowlist of response validator class names. All validators run by default. |
-| `AIOS_DISABLED_VALIDATORS` | Optional comma-separated response validator class names to disable. |
+| Framework preset | Other |
+| Root directory | `web` |
+| Build command | Leave empty |
+| Output directory | Leave empty |
 
-Task routes can override the global provider/model with variables such as
-`AIOS_CODING_PROVIDER` and `AIOS_CODING_GROQ_MODEL`. The same pattern applies
-to `REASONING`, `VISION`, `MATH`, `RESEARCH`, and `GENERAL`. Cost estimates use
-`AIOS_<PROVIDER>_INPUT_COST_PER_MILLION` and
-`AIOS_<PROVIDER>_OUTPUT_COST_PER_MILLION`; rates default to zero until configured.
+The API proxy is already configured in `web/vercel.json`.
 
-Provider-specific model variables:
+## Render configuration
 
-```text
-AIOS_GROQ_MODEL=llama-3.1-8b-instant
-AIOS_GEMINI_MODEL=gemini-2.0-flash
-AIOS_OPENAI_MODEL=gpt-4o-mini
-AIOS_DEEPSEEK_MODEL=deepseek-chat
+Create a Render Web Service from this repository using:
+
+| Setting | Value |
+| --- | --- |
+| Branch | `main` |
+| Runtime | Docker |
+| Root directory | Leave empty |
+| Instance | Free, when available |
+| Health check path | `/api/v1/health` |
+
+Add the environment variables above, then deploy. New commits to `main` automatically trigger Vercel and Render deployments.
+
+## API overview
+
+All routes use the `/api/v1` prefix. Authentication-protected requests require:
+
+```http
+Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
-When `AIOS_PROVIDER=auto`, AIOS tries configured providers in this order:
-
-```text
-Groq -> Gemini -> OpenAI -> DeepSeek
-```
-
-## Project Structure
-
-```text
-AI_tutor/
-  app/
-    config.py        .env loading and configured key detection
-    gateway.py       authentication, JWT, authorization, schemas, rate policy, and analytics
-    llm.py           provider calls, fallback, streaming parsers
-    validation.py    ordered response validation, repair, retry, and validator plugins
-    main.py          HTTP server, API routes, static file serving
-    migrate.py       versioned PostgreSQL migration runner
-    store.py         local JSON conversation storage
-  migrations/
-    001_create_users_chats_sessions.sql
-    002_create_projects_files_settings_api_keys.sql
-    003_create_logs_analytics.sql
-  data/
-    .gitkeep         keeps the data folder in Git
-  docs/
-    DEPLOYMENT.md    live deployment configuration
-  tests/
-    test_main.py     regression tests
-  web/
-    index.html       chat layout
-    app.js           frontend chat, streaming, voice, Markdown
-    styles.css       responsive UI styles
-  .env.example       safe environment template
-  SETUP.md           extra local setup notes
-```
-
-## API Overview
-
-| Method | Route | Description |
+| Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/health` | Returns server status and configured API key names. |
-| `POST` | `/api/v1/auth/register` | Registers a user, creates a durable session, and returns a Bearer JWT. |
-| `POST` | `/api/v1/auth/login` | Verifies credentials, creates a durable session, and returns a Bearer JWT. |
-| `GET` | `/api/v1/auth/me` | Returns the authenticated user and token session. |
-| `GET` | `/api/v1/analytics` | Returns gateway events for an authenticated administrator. |
-| `GET` | `/api/conversations` | Lists saved conversations. |
-| `GET` | `/api/usage` | Returns accumulated provider token and cost estimates. |
-| `GET` | `/api/observability` | Returns the system health and metrics dashboard payload. |
-| `POST` | `/api/conversations` | Creates a new conversation. |
-| `GET` | `/api/conversations/{id}` | Loads one conversation and its messages. |
-| `POST` | `/api/chat` | Sends a user message and returns a normal or streaming assistant reply. |
-| `POST` | `/api/plan` | Classifies an objective and returns complexity, subtasks, dependencies, tools, and success criteria. |
-| `POST` | `/api/orchestrate` | Plans, routes, and executes supported specialist agents through LangGraph. |
-
-All API routes are available under the stable `/api/v1` prefix. Legacy `/api`
-paths remain aliases for version 1. API responses include `X-Request-Id`,
-`X-API-Version`, and rate-limit headers. Set `AIOS_AUTH_REQUIRED=true` to make
-Bearer authentication mandatory for every protected route. Authenticated
-sessions and conversations are owner-scoped, and invalid requests return a
-structured `{error: {code, message, details}, request_id}` response.
-When PostgreSQL storage is selected, identities and analytics use the existing
-`users` and `analytics` tables; JSON storage uses the local gateway file.
-
-Streaming chat responses use newline-delimited JSON events:
-
-```json
-{"type":"meta","conversation_id":"...","provider":"gemini"}
-{"type":"progress","stage":"model","message":"Model stream connected"}
-{"type":"delta","content":"Hello"}
-{"type":"done","message":{"role":"assistant","content":"Hello"}}
-```
-
-## Deployment
-
-The live application uses a static Vercel frontend and a Docker-based Render
-backend connected to Supabase PostgreSQL, Qdrant Cloud, and optional Upstash
-Redis.
-
-- Application: https://ai-tutor-eta-ochre.vercel.app
-- Backend health: https://ai-tutor-backend-gc7m.onrender.com/api/health
-
-Vercel deploys only `web/` and proxies `/api/*` to Render. Render builds the root
-`Dockerfile`; the application applies PostgreSQL migrations idempotently during
-startup. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for configuration and
-verification details.
-
-Docker Compose remains supported for local development, workers, and recovery
-testing; it is not an additional public deployment target.
+| `GET` | `/api/v1/health` | Service, provider, and Redis status |
+| `POST` | `/api/v1/auth/register` | Create an account |
+| `POST` | `/api/v1/auth/login` | Sign in and receive a token |
+| `GET` | `/api/v1/auth/me` | Return the authenticated user |
+| `GET/POST` | `/api/v1/conversations` | List or create conversations |
+| `POST` | `/api/v1/chat` | Send a normal or streaming chat request |
+| `GET/POST` | `/api/v1/uploads` | List or upload artifacts |
+| `GET` | `/api/v1/conversations/search` | Search conversation history |
+| `GET` | `/api/v1/observability` | Runtime health and metrics |
+| `GET` | `/api/v1/usage` | Provider token and cost estimates |
 
 ## Testing
 
-Run the Python test suite:
+Run the complete suite:
 
 ```powershell
-python -m unittest discover -s tests
+python -m pytest -q
 ```
 
-Optional frontend syntax check:
+Check frontend JavaScript syntax:
 
 ```powershell
 node --check web/app.js
 ```
 
-## Notes
+Current verified result: **215 tests passed**.
 
-- `.env` is ignored by Git so API keys stay local.
-- `data/*.json` is ignored by Git so private chat history stays local.
-- This is a local development app, not a production-secured service yet.
+## Project structure
+
+```text
+app/             Python backend, authentication, storage, LLM routing, RAG, and agents
+web/             Static frontend and Vercel proxy configuration
+migrations/      PostgreSQL schema migrations
+tests/           Automated backend and frontend regression tests
+docs/            Deployment documentation
+Dockerfile       Render production image
+.env.example     Local configuration template
+.env.render.example  Render-safe variable template
+```
+
+## Free-tier considerations
+
+- Render may sleep after inactivity, so the first request can take longer.
+- Render's local filesystem is ephemeral; durable accounts and chats belong in Supabase.
+- Uploaded files may disappear after a Render restart, while their durable metadata depends on configured storage.
+- Each cloud service and AI provider has its own free quota and rate limits.
+- This setup is intended for light usage by roughly 100?200 registered users, not 100?200 simultaneous AI requests.
+
+## Security
+
+- Never commit `.env`, database passwords, Redis credentials, JWT secrets, or provider API keys.
+- Rotate any credential that has been posted publicly.
+- Keep write-capable MCP and execution tools disabled on the public deployment unless they are explicitly secured.
+- Use long, random production values for `AIOS_JWT_SECRET`.
+
+## License
+
+No license has been declared. All rights remain with the repository owner unless a license is added later.
