@@ -21,22 +21,19 @@ class ChatInterfaceTests(unittest.TestCase):
         self.assertIn("/api/v1/conversations/search", javascript)
         self.assertIn("renderChatSearchResults", javascript)
 
-    def test_authentication_ui_gates_boot_and_stores_bearer_token(self) -> None:
+    def test_public_chat_boots_without_an_authentication_barrier(self) -> None:
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('id="auth-dialog"', html)
-        self.assertIn('id="sign-in"', html)
-        self.assertNotIn('id="create-account"', html)
-        self.assertNotIn('data-auth-mode="register"', html)
-        self.assertNotIn('id="auth-name"', html)
-        self.assertIn('/api/v1/auth/me', javascript)
-        self.assertIn('/api/v1/auth/login', javascript)
+        self.assertNotIn('id="auth-dialog"', html)
+        self.assertNotIn('id="sign-in"', html)
+        self.assertNotIn('id="sign-out"', html)
+        self.assertNotIn('/api/v1/auth/me', javascript)
+        self.assertNotIn('/api/v1/auth/login', javascript)
         self.assertNotIn('/api/v1/auth/register', javascript)
-        self.assertIn('localStorage.setItem("aios-access-token"', javascript)
+        self.assertNotIn('aios-access-token', javascript)
         boot = javascript.split("async function boot()", 1)[1].split("\n}\n\nboot();", 1)[0]
-        self.assertIn("await ensureAuthenticated()", boot)
-        self.assertLess(boot.index("await ensureAuthenticated()"), boot.index("await ensureSession()"))
-
+        self.assertNotIn("ensureAuthenticated", boot)
+        self.assertIn("await ensureSession()", boot)
     def test_recent_chat_history_is_scrollable_and_rows_do_not_overlap(self) -> None:
         stylesheet = (ROOT / "web" / "styles.css").read_text(encoding="utf-8")
         javascript = (ROOT / "web" / "app.js").read_text(encoding="utf-8")

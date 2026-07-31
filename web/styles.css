@@ -898,18 +898,3 @@ body.tools-open .tool-panel {
 }
 
 .topbar-actions { display:flex; align-items:center; gap:10px; }
-.account-label { max-width:min(240px,30vw); overflow:hidden; color:var(--muted); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
-button.account-action { min-height:34px; padding:6px 12px; }
-.auth-dialog { width:min(440px,calc(100vw - 32px)); margin:auto; padding:28px; border:1px solid var(--line); border-radius:20px; background:var(--panel); color:var(--text); box-shadow:0 24px 80px rgba(0,0,0,.6); }
-.auth-dialog::backdrop { background:rgba(0,0,0,.82); backdrop-filter:blur(5px); }
-.auth-brand { width:42px; height:42px; display:grid; place-items:center; border-radius:12px; background:var(--accent); color:var(--bg); font-weight:800; }
-.auth-dialog h2 { margin:18px 0 6px; }
-.auth-dialog > p { margin:0; color:var(--muted); line-height:1.5; }
-.auth-form { margin-top:22px; display:grid; gap:14px; }
-.auth-form label { display:grid; gap:7px; font-size:13px; }
-.auth-form label small { color:var(--soft); font-weight:400; }
-.auth-form input { width:100%; border:1px solid var(--line); border-radius:12px; outline:0; background:var(--panel-2); color:var(--text); padding:12px 13px; }
-.auth-form input:focus { border-color:var(--muted); }
-.auth-status { min-height:20px; margin:0; color:var(--danger); font-size:13px; }
-.auth-actions { display:grid; grid-template-columns:1fr; gap:10px; }
-.auth-actions button { min-height:42px; border-radius:12px; }

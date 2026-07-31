@@ -55,84 +55,6 @@ const mobileTools = document.querySelector("#mobile-tools");
 const toolsToggle = document.querySelector("#tools-toggle");
 const closeTools = document.querySelector("#close-tools");
 const emptyState = document.querySelector("#empty-state");
-const authDialog = document.querySelector("#auth-dialog");
-const authForm = document.querySelector("#auth-form");
-const authEmail = document.querySelector("#auth-email");
-const authPassword = document.querySelector("#auth-password");
-const authStatus = document.querySelector("#auth-status");
-const accountLabel = document.querySelector("#account-label");
-const signOutButton = document.querySelector("#sign-out");
-let authenticationResolver = null;
-
-function storeAuthentication(payload) {
-  localStorage.setItem("aios-access-token", payload.access_token);
-  if (payload.session?.id) setActiveSession(payload.session.id);
-  accountLabel.textContent = payload.user?.display_name || payload.user?.email || "Account";
-  accountLabel.hidden = false;
-  signOutButton.hidden = false;
-}
-
-function clearAuthentication() {
-  localStorage.removeItem("aios-access-token");
-  localStorage.removeItem("aios-session-id");
-  activeSessionId = "";
-  accountLabel.hidden = true;
-  signOutButton.hidden = true;
-}
-
-function requestAuthentication(message = "") {
-  authStatus.textContent = message;
-  if (!authDialog.open) authDialog.showModal();
-  authEmail.focus();
-  return new Promise((resolve) => { authenticationResolver = resolve; });
-}
-
-async function ensureAuthenticated() {
-  const token = localStorage.getItem("aios-access-token") || "";
-  if (token) {
-    try {
-      const response = await authenticatedFetch("/api/v1/auth/me");
-      if (response.ok) {
-        const payload = await response.json();
-        accountLabel.textContent = payload.user?.display_name || payload.user?.email || "Account";
-        accountLabel.hidden = false;
-        signOutButton.hidden = false;
-        return true;
-      }
-    } catch (error) { console.error("Could not validate saved login", error); }
-    clearAuthentication();
-  }
-  return requestAuthentication(token ? "Your session expired. Please sign in again." : "");
-}
-
-async function submitAuthentication() {
-  const email = authEmail.value.trim();
-  const password = authPassword.value;
-  authStatus.textContent = "Signing in...";
-  authForm.querySelectorAll("button").forEach((button) => { button.disabled = true; });
-  try {
-    const response = await window.fetch("/api/v1/auth/login", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const payload = await response.json();
-    if (!response.ok) { authStatus.textContent = shortError(payload.error || "Authentication failed."); return; }
-    storeAuthentication(payload);
-    authStatus.textContent = "";
-    authPassword.value = "";
-    authDialog.close();
-    authenticationResolver?.(true);
-    authenticationResolver = null;
-  } catch (error) {
-    authStatus.textContent = shortError(error.message || "Could not reach the server.");
-  } finally {
-    authForm.querySelectorAll("button").forEach((button) => { button.disabled = false; });
-  }
-}
-
-authForm.addEventListener("submit", async (event) => { event.preventDefault(); await submitAuthentication(); });
-authDialog.addEventListener("cancel", (event) => event.preventDefault());
-signOutButton.addEventListener("click", () => { clearAuthentication(); window.location.reload(); });
 
 function applyTheme(theme) {
   const resolvedTheme = theme === "dark" ? "dark" : "light";
@@ -753,10 +675,7 @@ function shortError(value) {
 }
 
 function authenticatedFetch(url, options = {}) {
-  const token = localStorage.getItem("aios-access-token") || "";
-  const headers = { ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return window.fetch(url, { ...options, headers });
+  return window.fetch(url, options);
 }
 
 function addSelectedFiles(files) {
@@ -1143,8 +1062,6 @@ async function boot() {
   setActiveThread("main");
   localStorage.removeItem(ACTIVE_STREAM_KEY);
   messages.innerHTML = "";
-  const authenticated = await ensureAuthenticated();
-  if (!authenticated) return;
   await ensureSession();
   await syncSessionContext();
   await loadConversations();
