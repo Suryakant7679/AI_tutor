@@ -116,12 +116,14 @@ async function submitAuthentication(mode) {
     authName.focus();
     return;
   }
-  authStatus.textContent = mode === "register" ? "Creating account..." : "Signing in...";
+  authStatus.textContent = mode === "register" ? "Signing up..." : "Logging in...";
+  const requestBody = { email, password };
+  if (mode === "register") requestBody.display_name = displayName;
   authForm.querySelectorAll("button").forEach((button) => { button.disabled = true; });
   try {
     const response = await window.fetch(`/api/v1/auth/${mode}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, display_name: displayName }),
+      body: JSON.stringify(requestBody),
     });
     const payload = await response.json();
     if (!response.ok) { authStatus.textContent = shortError(payload.error || "Authentication failed."); return; }
