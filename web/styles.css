@@ -911,5 +911,5 @@ button.account-action { min-height:34px; padding:6px 12px; }
 .auth-form input { width:100%; border:1px solid var(--line); border-radius:12px; outline:0; background:var(--panel-2); color:var(--text); padding:12px 13px; }
 .auth-form input:focus { border-color:var(--muted); }
 .auth-status { min-height:20px; margin:0; color:var(--danger); font-size:13px; }
-.auth-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.auth-actions { display:grid; grid-template-columns:1fr; gap:10px; }
 .auth-actions button { min-height:42px; border-radius:12px; }
