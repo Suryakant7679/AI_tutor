@@ -142,12 +142,11 @@ class GatewayHTTPIntegrationTests(unittest.TestCase):
         self.main = main
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
-        self.originals = (main.STORE, main.GATEWAY_STORE, main.JWT, main.AUTH_REQUIRED, main.PUBLIC_ACCESS, main.REDIS)
+        self.originals = (main.STORE, main.GATEWAY_STORE, main.JWT, main.AUTH_REQUIRED, main.REDIS)
         main.STORE = ConversationStore(root / "conversations.json")
         main.GATEWAY_STORE = GatewayStore(root / "gateway.json")
         main.JWT = JWTService(main.GATEWAY_STORE.jwt_secret(), ttl_seconds=300)
         main.AUTH_REQUIRED = True
-        main.PUBLIC_ACCESS = False
         self.server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.AIOSHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -156,7 +155,7 @@ class GatewayHTTPIntegrationTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
-        self.main.STORE, self.main.GATEWAY_STORE, self.main.JWT, self.main.AUTH_REQUIRED, self.main.PUBLIC_ACCESS, self.main.REDIS = self.originals
+        self.main.STORE, self.main.GATEWAY_STORE, self.main.JWT, self.main.AUTH_REQUIRED, self.main.REDIS = self.originals
         self.temp.cleanup()
 
     def request(self, method: str, path: str, payload=None, token: str = ""):

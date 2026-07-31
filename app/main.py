@@ -82,7 +82,6 @@ CHAT_RATE_WINDOW = int(os.getenv("AIOS_CHAT_RATE_WINDOW", "60"))
 API_RATE_LIMIT = int(os.getenv("AIOS_API_RATE_LIMIT", "120"))
 API_RATE_WINDOW = int(os.getenv("AIOS_API_RATE_WINDOW", "60"))
 AUTH_REQUIRED = os.getenv("AIOS_AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
-PUBLIC_ACCESS = os.getenv("AIOS_PUBLIC_ACCESS", "true").strip().lower() in {"1", "true", "yes", "on"}
 GATEWAY_STORE = create_gateway_store(ROOT)
 JWT = JWTService(
     os.getenv("AIOS_JWT_SECRET", "").strip() or GATEWAY_STORE.jwt_secret(),
@@ -121,7 +120,7 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 if not GATEWAY_STORE.get_user(self.principal.user_id):
                     raise GatewayError(401, "invalid_token", "Bearer token user no longer exists.")
             public = normalized in {"/api/health", "/api/auth/register", "/api/auth/login"}
-            if AUTH_REQUIRED and not PUBLIC_ACCESS and not public and not self.principal:
+            if AUTH_REQUIRED and not public and not self.principal:
                 raise GatewayError(401, "authentication_required", "A Bearer access token is required.")
             identity = self.user_id or self.client_address[0]
             scope = "auth" if normalized.startswith("/api/auth/") else "api"
