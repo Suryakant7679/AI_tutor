@@ -1084,12 +1084,20 @@ def build_context_messages(
 ) -> list[dict[str, str]]:
     base_messages = fit_messages_to_token_window(messages, max_tokens)
     retrieval_query = latest_user_message(base_messages)
+    web_research = web_research_context_text(retrieval_query)
+    # For live questions, previous assistant answers and semantic memories may be stale.
+    # Preserve recent user context, but ground the new answer only in fresh tool evidence.
+    if web_research:
+        base_messages = [item for item in base_messages if item.get("role") != "assistant"][-3:]
     memory = short_term_memory or {}
     remembered_artifacts = memory.get("artifact_ids", []) if isinstance(memory, dict) else []
     effective_artifact_ids = list(dict.fromkeys([*(artifact_ids or []), *remembered_artifacts]))
     sections = remove_duplicate_context_sections(
         rank_context_sections(
-            context_sections(session, effective_artifact_ids, retrieval_query, memory, long_term_memory or {})
+            context_sections(
+                session, effective_artifact_ids, retrieval_query, memory, long_term_memory or {},
+                web_research=web_research,
+            )
         )
     )
     selected_sections: list[str] = []
@@ -1118,19 +1126,21 @@ def context_sections(
     session: dict[str, Any], artifact_ids: list[str], retrieval_query: str = "",
     short_term_memory: dict[str, Any] | None = None,
     long_term_memory: dict[str, Any] | None = None,
+    web_research: str | None = None,
 ) -> list[dict[str, Any]]:
     github_live = github_context_text(retrieval_query)
-    web_research = web_research_context_text(retrieval_query)
+    web_research = web_research if web_research is not None else web_research_context_text(retrieval_query)
     return [
         {"name": "developer_instructions", "priority": 100, "text": developer_instructions_context_text(session)},
+        {"name": "web_research", "priority": 99, "text": web_research},
         {"name": "github_live", "priority": 94, "text": github_live},
         {"name": "project", "priority": 95, "text": project_context_text(session)},
         {"name": "running_task", "priority": 92, "text": running_task_state_context_text(session)},
-        {"name": "short_term_memory", "priority": 90, "text": short_term_memory_context_text(short_term_memory or {})},
-        {"name": "long_term_memory", "priority": 89, "text": long_term_memory_context_text(long_term_memory or {})},
+        {"name": "short_term_memory", "priority": 90, "text": "" if web_research else short_term_memory_context_text(short_term_memory or {})},
+        {"name": "long_term_memory", "priority": 89, "text": "" if web_research else long_term_memory_context_text(long_term_memory or {})},
         {"name": "user_preferences", "priority": 88, "text": user_preferences_context_text(session)},
-        {"name": "retrieved_context", "priority": 86, "text": "" if github_live else retrieved_context_text(retrieval_query, user_id=str(session.get("user_id") or "") or None)},
-        {"name": "web_research", "priority": 85, "text": web_research},
+        {"name": "retrieved_context", "priority": 86, "text": "" if github_live or web_research else retrieved_context_text(retrieval_query, user_id=str(session.get("user_id") or "") or None)},
+
         {"name": "uploaded_files", "priority": 82, "text": uploaded_files_context_text(artifact_ids)},
         {"name": "open_files", "priority": 80, "text": open_files_context_text(session)},
         {"name": "git_status", "priority": 72, "text": git_status_context_text()},

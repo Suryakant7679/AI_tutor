@@ -117,7 +117,7 @@ class ToolOutputValidator:
 
 class CitationValidator:
     name = "CitationValidator"
-    _citation = re.compile(r"(?:\[[^\]]+\]\(https?://[^)]+\)|\[\d+\])")
+    _citation = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)")
 
     def validate(self, response: str, context: Mapping[str, Any]) -> ValidationResult:
         if context.get("requires_citations") and not self._citation.search(response):
