@@ -15,6 +15,7 @@ class ToolRoute:
 
 class MCPRouter:
     TOOL_CATALOG = {
+        "duckduckgo": ["duckduckgo_search"],
         "filesystem": ["list_files", "read_file", "search_text", "write_file"],
         "python": ["run_python", "package_info"],
         "terminal": ["run_command"],
@@ -36,6 +37,8 @@ class MCPRouter:
 
     def classify(self, request: str) -> ToolRoute:
         text = request.strip().lower()
+        if re.search(r"\b(web search|search (?:the )?web|research|sources?|citations?|references?|papers?|literature|latest)\b", text):
+            return ToolRoute("duckduckgo", "aios-duckduckgo", "duckduckgo_search", 0.94, "Request requires current web sources and URLs")
         if re.search(r"\b(aws|amazon web services|azure|google cloud|gcp|cloud resources?|s3 buckets?)\b", text):
             return ToolRoute("cloud", "aios-cloud", "cloud_inspect", 0.95, "Request targets a cloud provider")
         if re.search(r"\b(slack|notion|productivity|channel history)\b", text):

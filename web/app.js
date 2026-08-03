@@ -638,7 +638,7 @@ function appendMessage(role, content) {
 }
 
 function updateMessage(article, content, provider = "", progress = "", isStreaming = false) {
-  const role = provider ? `assistant via ${provider}` : "assistant";
+  const role = "assistant";
   article.classList.toggle("streaming", isStreaming);
   article.classList.remove("processing");
   article.innerHTML = messageHtml(role, content, progress, isStreaming);
@@ -650,7 +650,7 @@ function updateMessage(article, content, provider = "", progress = "", isStreami
 }
 
 function setMessageProcessing(article, status, provider = "") {
-  const role = provider ? `assistant via ${provider}` : "assistant";
+  const role = "assistant";
   article.classList.add("processing");
   article.classList.remove("streaming");
   article.innerHTML = processingHtml(role, status);

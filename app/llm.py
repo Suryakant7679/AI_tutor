@@ -19,7 +19,9 @@ SYSTEM_PROMPT = (
     "You are AIOS, a helpful AI assistant inside a local chatbot app. "
     "Answer clearly, stay practical, and ask a short follow-up question when the user goal is unclear. "
     "When explaining mathematics, show the relevant equations and steps, define the symbols, and write "
-    "mathematical notation as LaTeX using $...$ for inline formulas and $$...$$ for display formulas."
+    "mathematical notation as LaTeX using $...$ for inline formulas and $$...$$ for display formulas. "
+    "Use supplied DuckDuckGo or MCP evidence when answering. For factual and current claims, include clickable "
+    "Markdown source links using the exact supplied URLs; never invent bare numeric citations."
 )
 
 
@@ -56,20 +58,18 @@ def generate_response_stream(messages: list[dict[str, str]]) -> tuple[Iterator[s
     try:
         chunks, route = generate_with_router(messages, stream=True)
         assert not isinstance(chunks, str)
-        output = "".join(chunks).strip()
-        USAGE.record(route.provider, route.model, route.task, messages, output)
-        active_route = [route]
+        def live_chunks() -> Iterator[str]:
+            output: list[str] = []
+            try:
+                for chunk in chunks:
+                    output.append(chunk)
+                    yield chunk
+            finally:
+                text = "".join(output).strip()
+                USAGE.record(route.provider, route.model, route.task, messages, text)
+                OBSERVABILITY.record("model", f"{route.provider}/{route.model}", duration_ms=(time.perf_counter() - started) * 1000, properties={"task": route.task, "stream": True})
 
-        def retry(feedback: str) -> str:
-            retry_messages = [*messages, {"role": "system", "content": feedback}]
-            corrected, retry_route = _generate_response_once(retry_messages)
-            active_route[0] = retry_route
-            return corrected
-
-        validated = VALIDATION.process(output, validation_context(messages), retry=retry)
-        final_route = active_route[0]
-        OBSERVABILITY.record("model", f"{final_route.provider}/{final_route.model}", duration_ms=(time.perf_counter() - started) * 1000, properties={"task": final_route.task, "stream": True})
-        return iter((validated,)), final_route.provider
+        return live_chunks(), route.provider
     except (ValidationError, LLMError) as exc:
         OBSERVABILITY.record("model", f"{route.provider}/{route.model}" if route else "unrouted", success=False, duration_ms=(time.perf_counter() - started) * 1000, error=str(exc), properties={"task": route.task if route else "unknown", "stream": True})
         raise LLMError(str(exc)) from exc
@@ -156,16 +156,34 @@ def generate_stream_with_fallback(messages: list[dict[str, str]]) -> tuple[Itera
 
 
 def configured_providers() -> list[str]:
+    """Only Gemini and Groq may generate user-facing answers."""
     providers: list[str] = []
     if os.getenv("GROQ_API_KEY"):
         providers.append("groq")
     if os.getenv("GEMINI_API_KEY"):
         providers.append("gemini")
-    if os.getenv("OPENAI_API_KEY"):
-        providers.append("openai")
-    if os.getenv("DEEPSEEK_API_KEY"):
-        providers.append("deepseek")
     return providers
+
+
+def should_use_web_search(query: str) -> bool:
+    """Ask the active Gemini/Groq model whether fresh web evidence is necessary."""
+    query = " ".join(str(query).split())[:1000]
+    if not query:
+        return False
+    decision_prompt = (
+        "You are a tool-routing classifier. Decide whether answering the USER QUERY requires live web search. "
+        "Return exactly WEB for current affairs, recent or changing facts, requested sources/citations/papers, "
+        "shopping/travel recommendations, or facts you are not confident are stable. Return exactly DIRECT for "
+        "greetings, writing help, calculations, coding from supplied context, and stable textbook/book knowledge.\n\n"
+        f"USER QUERY: {query}"
+    )
+    try:
+        decision, route = generate_with_router([{"role": "user", "content": decision_prompt}], stream=False)
+        assert isinstance(decision, str)
+        OBSERVABILITY.record("model", f"{route.provider}/{route.model}", properties={"task": "tool-routing"})
+        return decision.strip().upper().startswith("WEB")
+    except LLMError:
+        return bool(re.search(r"\b(latest|today|current|news|recent|source|citation|reference|paper|research|look up|web search)\b", query, re.I))
 
 
 def chat_completions(provider: str, messages: list[dict[str, str]]) -> str:

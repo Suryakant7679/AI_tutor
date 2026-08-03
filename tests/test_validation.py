@@ -152,7 +152,7 @@ class LLMValidationIntegrationTests(unittest.TestCase):
         retry_messages = generate.call_args_list[1].args[0]
         self.assertEqual(retry_messages[-1], {"role": "system", "content": "fix it"})
 
-    def test_stream_is_buffered_and_validated_before_iterator_is_returned(self) -> None:
+    def test_stream_is_forwarded_incrementally_without_full_response_buffering(self) -> None:
         route = ModelRoute("general", "openai", "test-model")
         manager = mock.Mock()
         manager.process.return_value = "validated"
@@ -163,8 +163,8 @@ class LLMValidationIntegrationTests(unittest.TestCase):
         ):
             chunks, provider = llm.generate_response_stream([{"role": "user", "content": "hello"}])
         self.assertEqual(provider, "openai")
-        self.assertEqual(list(chunks), ["validated"])
-        manager.process.assert_called_once()
+        self.assertEqual(list(chunks), ["raw", " text"] )
+        manager.process.assert_not_called()
 
 
 if __name__ == "__main__":

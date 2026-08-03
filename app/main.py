@@ -27,7 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 try:
     from app.config import configured_api_keys, load_env
-    from app.llm import LLMError, USAGE, current_route, generate_response, generate_response_stream
+    from app.llm import LLMError, USAGE, current_route, generate_response, generate_response_stream, should_use_web_search
     from app.storage import create_store
     from app.redis_state import create_redis_state
     from app.store import utc_now
@@ -36,6 +36,7 @@ try:
     from app.mcp.github_tools import GitHubReader
     from app.mcp.python_tools import python_package_info
     from app.mcp.executor import explicit_mcp_answer
+    from app.mcp.duckduckgo_tools import research_context
     from app.agents.planner import PlannerAgent
     from app.agents.orchestrator import LangGraphOrchestrator
     from app.agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
@@ -45,7 +46,7 @@ try:
     )
 except ModuleNotFoundError:
     from config import configured_api_keys, load_env
-    from llm import LLMError, USAGE, current_route, generate_response, generate_response_stream
+    from llm import LLMError, USAGE, current_route, generate_response, generate_response_stream, should_use_web_search
     from storage import create_store
     from redis_state import create_redis_state
     from store import utc_now
@@ -54,6 +55,7 @@ except ModuleNotFoundError:
     from mcp.github_tools import GitHubReader
     from mcp.python_tools import python_package_info
     from mcp.executor import explicit_mcp_answer
+    from mcp.duckduckgo_tools import research_context
     from agents.planner import PlannerAgent
     from agents.orchestrator import LangGraphOrchestrator
     from agents.specialists import MemoryAgent, RAGAgent, SpecialistAgentRegistry
@@ -530,6 +532,9 @@ class AIOSHandler(BaseHTTPRequestHandler):
                 context_window_tokens = session["user_preferences"]["context_window_tokens"]
                 generic_mcp = explicit_mcp_answer(message)
                 if generic_mcp:
+                    session["mcp_outputs"] = generic_mcp[0]
+                    generic_mcp = None
+                if generic_mcp:
                     mcp_answer, mcp_category = generic_mcp
                     if body.get("stream"):
                         self.send_tool_chat_stream(
@@ -549,6 +554,9 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     })
                     return
                 python_answer = python_mcp_answer_text(message)
+                if python_answer:
+                    session["mcp_outputs"] = python_answer
+                    python_answer = None
                 if python_answer:
                     if body.get("stream"):
                         self.send_tool_chat_stream(
@@ -575,6 +583,9 @@ class AIOSHandler(BaseHTTPRequestHandler):
                     )
                     return
                 github_answer = github_answer_text(message)
+                if github_answer:
+                    session["mcp_outputs"] = github_answer
+                    github_answer = None
                 if github_answer:
                     if body.get("stream"):
                         self.send_tool_chat_stream(
@@ -1109,6 +1120,7 @@ def context_sections(
     long_term_memory: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     github_live = github_context_text(retrieval_query)
+    web_research = web_research_context_text(retrieval_query)
     return [
         {"name": "developer_instructions", "priority": 100, "text": developer_instructions_context_text(session)},
         {"name": "github_live", "priority": 94, "text": github_live},
@@ -1118,6 +1130,7 @@ def context_sections(
         {"name": "long_term_memory", "priority": 89, "text": long_term_memory_context_text(long_term_memory or {})},
         {"name": "user_preferences", "priority": 88, "text": user_preferences_context_text(session)},
         {"name": "retrieved_context", "priority": 86, "text": "" if github_live else retrieved_context_text(retrieval_query, user_id=str(session.get("user_id") or "") or None)},
+        {"name": "web_research", "priority": 85, "text": web_research},
         {"name": "uploaded_files", "priority": 82, "text": uploaded_files_context_text(artifact_ids)},
         {"name": "open_files", "priority": 80, "text": open_files_context_text(session)},
         {"name": "git_status", "priority": 72, "text": git_status_context_text()},
@@ -1260,6 +1273,17 @@ def github_context_text(query: str) -> str:
         "State clearly when a returned list is empty. Cite the included GitHub URLs:\n"
         + json.dumps(payload, ensure_ascii=False, default=str)
     )
+
+def web_research_context_text(query: str) -> str:
+    if os.getenv("AIOS_WEB_SEARCH_ENABLED", "true").strip().lower() not in {"1", "true", "yes", "on"}:
+        return ""
+    if not query.strip() or not should_use_web_search(query):
+        return ""
+    try:
+        return research_context(query, max_results=int(os.getenv("AIOS_WEB_SEARCH_RESULTS", "5")))
+    except Exception as exc:
+        OBSERVABILITY.record("mcp", "duckduckgo/search", success=False, error=str(exc))
+        return ""
 
 def short_term_memory_context_text(memory: dict[str, Any]) -> str:
     task = str(memory.get("task") or "").strip()
@@ -2140,7 +2164,9 @@ def citation_for_result(result: dict[str, Any], index: int) -> str:
     end_char = metadata.get("end_char")
     location = f", chars {start_char}-{end_char}" if start_char is not None and end_char is not None else ""
     source_label = "" if source_type == "document" else f"{source_type}: "
-    return f"[{index}] {source_label}{filename}, {chunk_id}{location}"
+    source_url = str(result.get("url") or metadata.get("url") or metadata.get("source_url") or "").strip()
+    label = f"{source_label}{filename}, {chunk_id}{location}"
+    return f"[{index}] [{label}]({source_url})" if source_url.startswith(("http://", "https://")) else f"[{index}] {label}"
 
 
 def add_citations_to_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -266,6 +266,7 @@ python -m app.mcp.filesystem_server
 python -m app.mcp.python_server
 python -m app.mcp.terminal_server
 python -m app.mcp.browser_server
+python -m app.mcp.duckduckgo_server
 python -m app.mcp.git_server
 python -m app.mcp.github_server
 python -m app.mcp.docker_server

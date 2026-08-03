@@ -5,6 +5,7 @@
     "aios-python": {"command": "python", "args": ["-m", "app.mcp.python_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
     "aios-terminal": {"command": "python", "args": ["-m", "app.mcp.terminal_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
     "aios-browser": {"command": "python", "args": ["-m", "app.mcp.browser_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
+    "aios-duckduckgo": {"command": "python", "args": ["-m", "app.mcp.duckduckgo_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
     "aios-git": {"command": "python", "args": ["-m", "app.mcp.git_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
     "aios-github": {"command": "python", "args": ["-m", "app.mcp.github_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
     "aios-docker": {"command": "python", "args": ["-m", "app.mcp.docker_server"], "cwd": "C:\\Users\\surya\\OneDrive\\Desktop\\AI tutor"},
