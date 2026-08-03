@@ -152,6 +152,29 @@ class LLMValidationIntegrationTests(unittest.TestCase):
         retry_messages = generate.call_args_list[1].args[0]
         self.assertEqual(retry_messages[-1], {"role": "system", "content": "fix it"})
 
+    def test_live_tool_plan_is_regenerated_before_delivery(self) -> None:
+        route = ModelRoute("research", "groq", "test-model")
+        messages = [
+            {"role": "system", "content": "AUTHORITATIVE LIVE WEB EVIDENCE\nURL: https://example.com/current"},
+            {"role": "user", "content": "Who is current?"},
+        ]
+        with (
+            mock.patch.object(
+                llm,
+                "_generate_response_once",
+                side_effect=[
+                    ("I will perform a quick search.\n\nDuckDuckGo Search: current", route),
+                    ("The current office holder is Person. [Official source](https://example.com/current)", route),
+                ],
+            ) as generate,
+            mock.patch.object(llm, "VALIDATION") as validation,
+        ):
+            validation.process.side_effect = lambda text, *_args, **_kwargs: text
+            chunks, provider = llm.generate_response_stream(messages)
+        self.assertEqual(provider, "groq")
+        self.assertIn("Official source", "".join(chunks))
+        self.assertEqual(generate.call_count, 2)
+
     def test_stream_is_forwarded_incrementally_without_full_response_buffering(self) -> None:
         route = ModelRoute("general", "openai", "test-model")
         manager = mock.Mock()

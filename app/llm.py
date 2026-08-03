@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Iterator
 from threading import local
@@ -25,7 +26,8 @@ SYSTEM_PROMPT = (
     "When sources conflict, prefer official primary sources and evidence current as of today's supplied date. "
     "For factual and current claims, include clickable Markdown source links using the exact supplied URLs. "
     "Never cite a search query, never invent bare numeric citations, and never reuse an earlier answer that "
-    "conflicts with live evidence."
+    "conflicts with live evidence. Tool execution is already complete when evidence is supplied: return only "
+    "the final answer, never a plan or a statement that you will search."
 )
 
 
@@ -39,9 +41,62 @@ VALIDATION = ValidationManager.from_env()
 _ROUTE_STATE = local()
 
 
+def has_live_tool_evidence(messages: list[dict[str, str]]) -> bool:
+    return any(
+        item.get("role") == "system"
+        and ("AUTHORITATIVE LIVE WEB EVIDENCE" in item.get("content", "") or "Live GitHub MCP results" in item.get("content", ""))
+        for item in messages
+    )
+
+
+def is_incomplete_tool_plan(text: str) -> bool:
+    if re.search(r"\[[^\]]+\]\(https?://[^)]+\)", text):
+        return False
+    return bool(re.search(
+        r"\b(?:i need to (?:find|search|look up)|i (?:will|'ll) (?:search|look up|check)|"
+        r"perform (?:a )?(?:quick )?search|duckduckgo search\s*:|let me (?:search|check))\b",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def finalize_grounded_response(text: str, messages: list[dict[str, str]]) -> str:
+    evidence = "\n".join(
+        item.get("content", "") for item in messages
+        if item.get("role") == "system" and "AUTHORITATIVE LIVE WEB EVIDENCE" in item.get("content", "")
+    )
+    sources = re.findall(r"\[\d+\]\s+([^\n]+)\nURL:\s*(https?://\S+)", evidence)
+    if not sources:
+        return text.strip()
+    cleaned = re.sub(r"(?<!\])\s*\[\d+\]", "", text)
+    cleaned = re.sub(r"(?m)^\s*https?://\S+\s*$", "", cleaned).strip()
+    existing_urls = set(re.findall(r"\[[^\]]+\]\((https?://[^)]+)\)", cleaned))
+    links = [f"[{title.strip()}]({url})" for title, url in sources[:3] if url not in existing_urls]
+    if links:
+        cleaned += "\n\nSources:\n\n" + "\n".join(f"- {link}" for link in links)
+    return cleaned
+
+
 def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
     text, route = _generate_response_once(messages)
     active_route = [route]
+    if has_live_tool_evidence(messages) and is_incomplete_tool_plan(text):
+        text, corrected_route = _generate_response_once([
+            *messages,
+            {
+                "role": "system",
+                "content": (
+                    "The tools have already finished and their results are in the authoritative evidence above. "
+                    "Do not announce, request, or simulate another search. Return the completed answer now, using "
+                    "the freshest official evidence and at least one clickable Markdown source link."
+                ),
+            },
+        ])
+        active_route[0] = corrected_route
+        if is_incomplete_tool_plan(text):
+            raise LLMError("The model returned a tool plan instead of a final grounded answer.")
+    if has_live_tool_evidence(messages):
+        text = finalize_grounded_response(text, messages)
 
     def retry(feedback: str) -> str:
         retry_messages = [*messages, {"role": "system", "content": feedback}]
@@ -57,6 +112,11 @@ def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
 
 
 def generate_response_stream(messages: list[dict[str, str]]) -> tuple[Iterator[str], str]:
+    # Tool-grounded answers are completed and validated before delivery so an
+    # intermediate "I will search" plan can never leak into the chat UI.
+    if has_live_tool_evidence(messages):
+        text, provider = generate_response(messages)
+        return iter((text,)), provider
     started = time.perf_counter()
     route: ModelRoute | None = None
     try:
