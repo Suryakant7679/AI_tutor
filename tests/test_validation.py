@@ -137,6 +137,25 @@ class ResponseValidatorTests(unittest.TestCase):
         self.assertFalse(context["requires_citations"])
 
 class LLMValidationIntegrationTests(unittest.TestCase):
+    def test_prior_assistant_clarification_is_not_appended_to_new_answer(self) -> None:
+        prior = (
+            "I understand you'd like me to use web search results when replying. When I'm provided with "
+            "information from a web search, I use it to answer your questions.\n\n"
+            "Is there something specific you'd like me to search for, or a question you'd like me to answer "
+            "using web evidence?"
+        )
+        generated = f"The current Chief Minister of West Bengal is Suvendu Adhikari.\n\n{prior}"
+        messages = [
+            {"role": "user", "content": "search web and then reply"},
+            {"role": "assistant", "content": prior},
+            {"role": "user", "content": "Who is the current chief minister of Bengal? Use web search."},
+        ]
+
+        self.assertEqual(
+            llm.remove_echoed_assistant_responses(generated, messages),
+            "The current Chief Minister of West Bengal is Suvendu Adhikari.",
+        )
+
     def test_non_streaming_response_is_validated_and_retried_once(self) -> None:
         route = ModelRoute("general", "openai", "test-model")
         manager = mock.Mock()

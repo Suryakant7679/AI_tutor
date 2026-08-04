@@ -27,7 +27,8 @@ SYSTEM_PROMPT = (
     "For factual and current claims, include clickable Markdown source links using the exact supplied URLs. "
     "Never cite a search query, never invent bare numeric citations, and never reuse an earlier answer that "
     "conflicts with live evidence. Tool execution is already complete when evidence is supplied: return only "
-    "the final answer, never a plan or a statement that you will search."
+    "the final answer, never a plan or a statement that you will search. "
+    "Do not repeat or append an earlier assistant response to the new answer."
 )
 
 
@@ -77,6 +78,24 @@ def finalize_grounded_response(text: str, messages: list[dict[str, str]]) -> str
     return cleaned
 
 
+def remove_echoed_assistant_responses(text: str, messages: list[dict[str, str]]) -> str:
+    """Remove long prior assistant messages copied verbatim into a new response."""
+    cleaned = text.strip()
+    prior_responses = {
+        item.get("content", "").strip()
+        for item in messages
+        if item.get("role") == "assistant" and len(item.get("content", "").strip()) >= 80
+    }
+    for prior in sorted(prior_responses, key=len, reverse=True):
+        if prior not in cleaned:
+            continue
+        candidate = cleaned.replace(prior, "").strip()
+        candidate = re.sub(r"(?:\r?\n\s*){3,}", "\n\n", candidate).strip()
+        if candidate:
+            cleaned = candidate
+    return cleaned
+
+
 def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
     text, route = _generate_response_once(messages)
     active_route = [route]
@@ -97,12 +116,13 @@ def generate_response(messages: list[dict[str, str]]) -> tuple[str, str]:
             raise LLMError("The model returned a tool plan instead of a final grounded answer.")
     if has_live_tool_evidence(messages):
         text = finalize_grounded_response(text, messages)
+    text = remove_echoed_assistant_responses(text, messages)
 
     def retry(feedback: str) -> str:
         retry_messages = [*messages, {"role": "system", "content": feedback}]
         corrected, retry_route = _generate_response_once(retry_messages)
         active_route[0] = retry_route
-        return corrected
+        return remove_echoed_assistant_responses(corrected, messages)
 
     try:
         validated = VALIDATION.process(text, validation_context(messages), retry=retry)
