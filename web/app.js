@@ -206,6 +206,16 @@ mobileTools.addEventListener("click", () => document.body.classList.toggle("tool
 toolsToggle.addEventListener("click", () => document.body.classList.toggle("tools-open"));
 closeTools.addEventListener("click", () => document.body.classList.remove("tools-open"));
 
+document.querySelectorAll("[data-domain][data-prompt]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const domain = button.dataset.domain || "AI Tutor";
+    input.value = button.dataset.prompt || "";
+    input.placeholder = domain + " request";
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 180) + "px";
+    input.focus();
+  });
+});
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
